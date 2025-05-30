@@ -4,16 +4,19 @@
 
 using TransformationFunc = std::function<void(Image&, int)>;
 
-void processImageTransforms(const std::string& inputFileName) {
-    // Extract the base name
-    size_t dotPos = inputFileName.find_last_of('.');
-    std::string baseName = inputFileName.substr(0, dotPos);
+void processImageTransforms(const std::string& inputFile, const std::string& folderName) {
 
-    // Load the image
-    std::string inputPath = "Input/" + inputFileName;
+    // Extract the base name without the extension
+    size_t dotPos = inputFile.find_last_of('.');
+    std::string baseName = inputFile.substr(0, dotPos);
+    
+    // Load the image from the input path
+    std::string inputPath = "Input/" + folderName + "/" + inputFile;
+    printf("%s\n", inputPath.c_str()); // Print the input path
+    printf("%s\n", folderName.c_str()); // Print the folder name
     Image image(inputPath.c_str());
 
-    // Configure transformations
+    // Define the transformation functions
     std::vector<TransformationFunc> transformations = {
         [](Image& img, int i) { img.btb(i); },
         [](Image& img, int i) { img.btw(i); },
@@ -23,24 +26,29 @@ void processImageTransforms(const std::string& inputFileName) {
         [](Image& img, int i) { img.white_to_black(i); }
     };
 
+    // Define suffixes for the output file names
     std::vector<std::string> suffixes = {"BTB", "BTW", "WTB", "WTW", "BTOW", "WTOB"};
+
+    // Define output directories for each transformation
     std::vector<std::string> outputDirs = {
         "Output/BTB/", "Output/BTW/", "Output/WTB/",
         "Output/WTW/", "Output/BTOW/", "Output/WTOB/"
     };
 
-    // Apply transformations
+    // Apply each transformation for a range of threshold values
     for (int threshold = 20; threshold <= 240; threshold += 20) {
         for (size_t i = 0; i < transformations.size(); ++i) {
-            Image modified = image;
-            transformations[i](modified, threshold);
+            Image modified = image; // Create a copy of the original image
+            transformations[i](modified, threshold); // Apply the transformation
 
+            // Define the output path for the modified image
             std::string outputPath = outputDirs[i] + baseName + " - " + suffixes[i] + " " + std::to_string(threshold) + ".png";
-            modified.write(outputPath.c_str());
+            modified.write(outputPath.c_str()); // Save the modified image
 
+            // Special case for threshold 120
             if (threshold == 120) {
                 std::string specialPath = "Output/120/" + baseName + " - " + suffixes[i] + " 120.png";
-                modified.write(specialPath.c_str());
+                modified.write(specialPath.c_str()); // Save the modified image to the special directory
             }
         }
     }
