@@ -1,19 +1,15 @@
-#include "ImageProcessor.h"
+#include "ImageProcessoring.h"
 #include <vector>
 #include <functional>
 
+#include <vector>
+#include <string>
+
+
 using TransformationFunc = std::function<void(Image&, int)>;
 
-void processImageTransforms(const std::string& inputFile, const std::string& folderName) {
+void processImageTransforms(const std::string& inputPath, const std::string& baseName) {
 
-    // Extract the base name without the extension
-    size_t dotPos = inputFile.find_last_of('.');
-    std::string baseName = inputFile.substr(0, dotPos);
-    
-    // Load the image from the input path
-    std::string inputPath = "Input/" + folderName + "/" + inputFile;
-    printf("%s\n", inputPath.c_str()); // Print the input path
-    printf("%s\n", folderName.c_str()); // Print the folder name
     Image image(inputPath.c_str());
 
     // Define the transformation functions
@@ -52,4 +48,5 @@ void processImageTransforms(const std::string& inputFile, const std::string& fol
             }
         }
     }
+
 }
