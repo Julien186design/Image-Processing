@@ -15,4 +15,4 @@ Output
 ├── BTW
 ├── WTB
 ├── WTOB
-└── WTW
+└─ WTW
