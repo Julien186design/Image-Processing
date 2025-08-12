@@ -1,8 +1,8 @@
 #include "ImageProcessoring.h"
 
 int main() {
-    const std::string inputFile = "Polina appartement.jpg";	//image to process
-    const std::string folderName = "Polina";	//folder
+    const std::string inputFile = "Oreo cake.jpg";	//image to process
+    const std::string folderName = "Cake";	//folder
     
     // Extract the base name without the extension
     size_t dotPos = inputFile.find_last_of('.');
