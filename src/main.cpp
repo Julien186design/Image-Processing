@@ -1,8 +1,20 @@
-#include "ImageProcessor.h"
+#include "ImageProcessoring.h"
 
 int main() {
-    const std::string inputFile = "Barbie holds itself.jpg";	//image to process
-    const std::string folderName = "Barbie";	//folder
-    processImageTransforms(inputFile, folderName);
+    const std::string inputFile = "Polina appartement.jpg";	//image to process
+    const std::string folderName = "Polina";	//folder
+    
+    // Extract the base name without the extension
+    size_t dotPos = inputFile.find_last_of('.');
+    std::string baseName = inputFile.substr(0, dotPos);
+    
+    // Load the image from the input path
+    std::string inputPath = "Input/" + folderName + "/" + inputFile;
+    printf("%s\n", inputPath.c_str()); // Print the input path
+    printf("%s\n", folderName.c_str()); // Print the folder name
+    
+    
+	processImageTransforms(inputPath, baseName);
+	
     return 0;
 }
