@@ -1,9 +1,8 @@
 #ifndef IMAGE_PROCESSOR_H
 #define IMAGE_PROCESSOR_H
 
-#include <string>
 #include "Image.h"
 
-void processImageTransforms(const std::string& inputFileName);
+void processImageTransforms(const std::string& inputPath, const std::string& baseName, int threshold, int lastThreshold, int step);
 
 #endif
