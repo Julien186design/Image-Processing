@@ -7,3 +7,5 @@ Here's the original project.
 https://github.com/Code-Break0/Image-Processing
 
 To run the code, you need to create a folder "Output" containing subfolders : "120", "BTB", "BTOW", "BTW", "WTB", "WTOB", "WTW".
+
+The value 120 was determined arbitrarily, nothing prevents you from modifying or deleting it.
