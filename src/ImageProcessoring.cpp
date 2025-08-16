@@ -8,7 +8,7 @@
 
 using TransformationFunc = std::function<void(Image&, int)>;
 
-void processImageTransforms(const std::string& inputPath, const std::string& baseName) {
+void processImageTransforms(const std::string& inputPath, const std::string& baseName, int threshold, int lastThreshold, int step) {
 
     Image image(inputPath.c_str());
 
@@ -30,9 +30,11 @@ void processImageTransforms(const std::string& inputPath, const std::string& bas
         "Output/BTB/", "Output/BTW/", "Output/WTB/",
         "Output/WTW/", "Output/BTOW/", "Output/WTOB/"
     };
+    
 
     // Apply each transformation for a range of threshold values
-    for (int threshold = 20; threshold <= 240; threshold += 20) {
+    //for (int threshold = 120; threshold <= 140; threshold += 20) {
+    for (threshold; threshold <= lastThreshold; threshold += step) {
         for (size_t i = 0; i < transformations.size(); ++i) {
             Image modified = image; // Create a copy of the original image
             transformations[i](modified, threshold); // Apply the transformation
@@ -44,7 +46,7 @@ void processImageTransforms(const std::string& inputPath, const std::string& bas
             // Special case for threshold 120
             if (threshold == 120) {
                 std::string specialPath = "Output/120/" + baseName + " - " + suffixes[i] + " 120.png";
-                modified.write(specialPath.c_str()); // Save the modified image to the special directory
+                modified.write(specialPath.c_str());
             }
         }
     }
