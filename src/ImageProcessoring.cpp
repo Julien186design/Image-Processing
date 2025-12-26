@@ -8,16 +8,17 @@
 
 using TransformationFunc = std::function<void(Image&, int)>;
 
-void processImageTransforms(const std::string& inputPath, const std::string& baseName, int threshold, int lastThreshold, int step) {
+void processImageTransforms(const std::string& inputPath, const std::string& baseName,
+    int threshold, int lastThreshold, int step) {
 
     Image image(inputPath.c_str());
 
     // Define the transformation functions
     std::vector<TransformationFunc> transformations = {
-        [](Image& img, int i) { img.btb(i); },
-        [](Image& img, int i) { img.btw(i); },
-        [](Image& img, int i) { img.wtb(i); },
-        [](Image& img, int i) { img.wtw(i); },
+        [](Image& img, int i) { img.darkenBelowThreshold(i); },
+        [](Image& img, int i) { img.whitenBelowThreshold(i); },
+        [](Image& img, int i) { img.darkenAboveThreshold(i); },
+        [](Image& img, int i) { img.whitenAboveThreshold(i); },
         [](Image& img, int i) { img.black_to_white(i); },
         [](Image& img, int i) { img.white_to_black(i); }
     };
@@ -32,15 +33,14 @@ void processImageTransforms(const std::string& inputPath, const std::string& bas
     };
     
 
-    // Apply each transformation for a range of threshold values
-    //for (int threshold = 120; threshold <= 140; threshold += 20) {
     for (threshold; threshold <= lastThreshold; threshold += step) {
         for (size_t i = 0; i < transformations.size(); ++i) {
             Image modified = image; // Create a copy of the original image
             transformations[i](modified, threshold); // Apply the transformation
 
             // Define the output path for the modified image
-            std::string outputPath = outputDirs[i] + baseName + " - " + suffixes[i] + " " + std::to_string(threshold) + ".png";
+            std::string outputPath = outputDirs[i] + baseName + " - " + suffixes[i]
+            + " " + std::to_string(threshold) + ".png";
             modified.write(outputPath.c_str()); // Save the modified image
 
             // Special case for threshold 120
