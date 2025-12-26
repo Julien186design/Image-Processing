@@ -1,4 +1,3 @@
-Image-Processing
 A C++ project for manipulating image pixels in fun ways.
 This project is based on Code-Break0's work. I add my own modifications to create cool effects with images.
 
