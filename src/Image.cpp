@@ -2,9 +2,19 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #define BYTE_BOUND(value) value < 0 ? 0 : (value > 255 ? 255 : value)
 
-#include "stb_image.h"
-#include "stb_image_write.h"
+/*
+ *CLion on Linux Mint
+ *Run/Edit Configurations
+ *Working directory : $PROJECT8DIR$ | /[...]/CLion Projects/Image Processing
+*/
+#include <stb_image.h>
+#include <stb_image_write.h>
 
+/*
+ *Dev-C++ on Windows
+ *#include "stb_image.h"
+ *#include "stb_image_write.h"
+*/
 #include "Image.h"
 
 
@@ -497,7 +507,7 @@ Image& Image::grayscale_avg() {
 	return *this;
 }
 
-Image& Image::btb(int s) {  //the blacked pixels become black
+Image& Image::darkenBelowThreshold(int s) {  //the blacked pixels become black
 	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
 		//black or white : modified line from grayscale_avg right above
 		int rgb = (data[i] + data[i+1] + data[i+2]);
@@ -508,7 +518,7 @@ Image& Image::btb(int s) {  //the blacked pixels become black
 	return *this;
 }
 
-Image& Image::btw(int s) {	//the blackest pixels become white
+Image& Image::whitenBelowThreshold(int s) {	//the blackest pixels become white
 	for(size_t i = 0; i < size; i += channels) {
 		int rgb = (data[i] + data[i + 1] + data[i + 2]);
 		if (rgb < 3 * s) {
@@ -518,8 +528,7 @@ Image& Image::btw(int s) {	//the blackest pixels become white
 	return *this;
 }
 
-
-Image& Image::wtb(int s) {  //the whitest pixels become black
+Image& Image::darkenAboveThreshold(int s) {  //the whitest pixels become black
 	for(size_t i = 0; i < size; i+=channels) {
 		int rgb = (data[i] + data[i+1] + data[i+2]);
 		if (rgb > 3*s) {
@@ -529,7 +538,7 @@ Image& Image::wtb(int s) {  //the whitest pixels become black
 	return *this;
 }
 
-Image& Image::wtw(int s) {    //the whitest pixels become white
+Image& Image::whitenAboveThreshold(int s) {    //the whitest pixels become white
 	for(size_t i = 0; i < size; i+=channels) {
 		int rgb = (data[i] + data[i+1] + data[i+2]);
 		if (rgb > 3*s) {
