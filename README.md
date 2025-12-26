@@ -1,11 +1,13 @@
-# Image-Processing
-A c++ project for manipulating image data in fun ways.
+Image-Processing
+A C++ project for manipulating image pixels in fun ways.
+This project is based on Code-Break0's work. I add my own modifications to create cool effects with images.
 
-This is a project by Code-Break0. I add my own code here to do some cool stuff with images.
+How to Run the Code?
+To run the code, you need to create two folders: "Input" and "Output".
 
-Here's the original project.
-https://github.com/Code-Break0/Image-Processing
+"Input" must contain the pictures you want to modify. Organize them in subfolders, for example: Input/Cake/Oreo cake.jpg.
 
-To run the code, you need to create a folder "Output" containing subfolders : "120", "BTB", "BTOW", "BTW", "WTB", "WTOB", "WTW".
+"Output" must contain the following subfolders:
+120, BTB, BTOW, BTW, WTB, WTOB, WTW.
 
-The value 120 was determined arbitrarily, nothing prevents you from modifying or deleting it.
+Note: The value 120 was chosen arbitrarily—feel free to modify or remove it.
