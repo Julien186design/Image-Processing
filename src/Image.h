@@ -70,10 +70,10 @@ struct Image {
 
 	Image& grayscale_avg();
 
-	Image& wtb(int s);
-	Image& wtw(int s);
-	Image& btb(int s);
-	Image& btw(int s);
+	Image& darkenAboveThreshold(int s);
+	Image& whitenAboveThreshold(int s);
+	Image& darkenBelowThreshold(int s);
+	Image& whitenBelowThreshold(int s);
 
 	Image& black_to_white(int s);
 	Image& white_to_black(int s);
