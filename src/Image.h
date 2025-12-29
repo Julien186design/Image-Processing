@@ -1,6 +1,9 @@
 #include <stdint.h>
 #include <cstdio>
 #include <complex>
+#include <functional>
+#include <vector>
+
 
 //legacy feature of C
 #undef __STRICT_ANSI__
@@ -13,6 +16,7 @@
 #include "schrift.h"
 
 #define STEG_HEADER_SIZE sizeof(uint32_t) * 8
+
 
 enum ImageType {
 	PNG, JPG, BMP, TGA
@@ -43,6 +47,15 @@ struct Image {
 	Image& std_convolve_clamp_to_border(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc);
 	Image& std_convolve_cyclic(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc);
 
+	Image& applyThresholdTransformationRegionFraction(
+		int threshold,
+		int fraction,
+		const std::vector<int>& rectanglesToModify,
+		std::function<bool(int)> condition,
+		std::function<uint8_t()> transformation
+	);
+
+
 	static uint32_t rev(uint32_t n, uint32_t a);
 	static void bit_rev(uint32_t n, std::complex<double> a[], std::complex<double>* A);
 
@@ -70,6 +83,8 @@ struct Image {
 
 	Image& grayscale_avg();
 
+	Image& applyThresholdTransformationRegionFraction(int threshold, float fraction, std::function<bool(int)> condition, std::function<uint8_t()> transformation);
+
 	Image& darkenAboveThreshold(int s);
 	Image& whitenAboveThreshold(int s);
 	Image& darkenBelowThreshold(int s);
@@ -77,6 +92,16 @@ struct Image {
 
 	Image& black_to_white(int s);
 	Image& white_to_black(int s);
+	/*
+	Image& darkenBelowThresholdRegionFraction(int s, float fraction);
+	Image& whitenBelowThresholdRegionFraction(int s, float fraction);
+	Image& darkenAboveThresholdRegionFraction(int s, float fraction);
+	Image& whitenAboveThresholdRegionFraction(int s, float fraction);
+	*/
+	Image& darkenBelowThresholdRegionFraction(int s, int fraction, const std::vector<int>& rectanglesToModify);
+	Image& whitenBelowThresholdRegionFraction(int s, int fraction, const std::vector<int>& rectanglesToModify);
+	Image& darkenAboveThresholdRegionFraction(int s, int fraction, const std::vector<int>& rectanglesToModify);
+	Image& whitenAboveThresholdRegionFraction(int s, int fraction, const std::vector<int>& rectanglesToModify);
 
 	Image& grayscale_lum();
 
