@@ -1,12 +1,16 @@
-#include "ImageProcessoring.h"
+#include "ImageProcessing.h"
 
 int main() {
-    const std::string inputFile = "Oreo cake.jpg";
-    const std::string folderName = "Cake";
-    
-    int threshold = 40;
-    int lastThreshold = 220;
-    int step = 20;
+    const std::string inputFile = "Oreo Cake.jpg";
+    const std::string folderName = "Food";
+
+	int threshold = 10;
+	int lastThreshold = 240;
+	int step = 10;
+	int fraction = 2;
+	std::vector<int> rectanglesToModify = {0, 5, 10, 15};
+	bool totalT = true;
+	bool partialT = true;
     		
     // Extract the base name without the extension
     size_t dotPos = inputFile.find_last_of('.');
@@ -17,7 +21,7 @@ int main() {
     printf("%s\n", inputPath.c_str()); // Print the input path
     printf("%s\n", folderName.c_str()); // Print the folder name
         
-	processImageTransforms(inputPath, baseName, threshold, lastThreshold, step);
+	processImageTransforms(inputPath, baseName, threshold, lastThreshold, step, fraction, rectanglesToModify, totalT, partialT);
 
     return 0;
 }
