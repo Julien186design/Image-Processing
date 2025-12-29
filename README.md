@@ -1,3 +1,5 @@
+Image-Processing
+
 A C++ project for manipulating image pixels in fun ways.
 This project is based on Code-Break0's work. I add my own modifications to create cool effects with images.
 
@@ -10,3 +12,6 @@ To run the code, you need to create two folders: "Input" and "Output".
 120, BTB, BTOW, BTW, WTB, WTOB, WTW.
 
 Note: The value 120 was chosen arbitrarily—feel free to modify or remove it.
+
+Here's Code-Break0's project.
+https://github.com/Code-Break0/Image-Processing
