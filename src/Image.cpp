@@ -88,6 +88,174 @@ ImageType Image::get_file_type(const char* filename) {
 	return PNG;
 }
 
+Image& Image::darkenBelowThreshold(int s) {  //the blacked pixels become black
+	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
+		//black or white : modified line from grayscale_avg right above
+		int rgb = (data[i] + data[i+1] + data[i+2]);
+		if (rgb < 3*s) {
+			data[i] = data[i + 1] = data[i + 2] = 0;    // used to be memset(data+i, 0, 3);
+		}
+	}
+	return *this;
+}
+
+Image& Image::whitenBelowThreshold(int s) {	//the blackest pixels become white
+	for(size_t i = 0; i < size; i += channels) {
+		int rgb = (data[i] + data[i + 1] + data[i + 2]);
+		if (rgb < 3 * s) {
+			data[i] = data[i + 1] = data[i + 2] = 255;
+		}
+	}
+	return *this;
+}
+
+Image& Image::darkenAboveThreshold(int s) {  //the whitest pixels become black
+	for(size_t i = 0; i < size; i+=channels) {
+		int rgb = (data[i] + data[i+1] + data[i+2]);
+		if (rgb > 3*s) {
+			data[i] = data[i + 1] = data[i + 2] = 0;
+		}
+	}
+	return *this;
+}
+
+Image& Image::whitenAboveThreshold(int s) {    //the whitest pixels become white
+	for(size_t i = 0; i < size; i+=channels) {
+		int rgb = (data[i] + data[i+1] + data[i+2]);
+		if (rgb > 3*s) {
+			data[i] = data[i + 1] = data[i + 2] = 255;
+		}
+	}
+	return *this;
+}
+
+Image& Image::black_to_white(int s) {
+	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
+		int rgb = (data[i] + data[i+1] + data[i+2]);
+		if (rgb < 3*s) {
+			data[i] = data[i + 1] = data[i + 2] = 255;
+		} else {
+			data[i] = data[i + 1] = data[i + 2] = 0;
+		}
+	}
+	return *this;
+}
+
+Image& Image::white_to_black(int s) {
+	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
+		int rgb = (data[i] + data[i+1] + data[i+2]);
+		if (rgb > 3*s) {
+			data[i] = data[i + 1] = data[i + 2] = 255;
+		} else {
+			data[i] = data[i + 1] = data[i + 2] = 0;
+		}
+	}
+	return *this;
+}
+/*
+Image& Image::applyThresholdTransformationRegionFraction(int threshold, float fraction, std::function<bool(int)> condition, std::function<uint8_t()> transformation) {
+	uint16_t roi_width = static_cast<uint16_t>(w * fraction);
+	uint16_t roi_height = static_cast<uint16_t>(h * fraction);
+	for (uint16_t y = 0; y < roi_height; ++y) {
+		for (uint16_t x = 0; x < roi_width; ++x) {
+			size_t i = (y * w + x) * channels;
+			int rgb = (data[i] + data[i + 1] + data[i + 2]);
+			if (condition(rgb)) {
+				uint8_t value = transformation();
+				data[i] = data[i + 1] = data[i + 2] = value;
+			}
+		}
+	}
+	return *this;
+}
+*/
+Image& Image::applyThresholdTransformationRegionFraction(
+	int threshold,
+	int fraction,
+	const std::vector<int>& rectanglesToModify,
+	std::function<bool(int)> condition,
+	std::function<uint8_t()> transformation
+) {
+	int numRectanglesPerRow = fraction * 2;  // Nombre de rectangles par ligne
+	int numRectanglesPerCol = fraction * 2;  // Nombre de rectangles par colonne
+	int totalRectangles = numRectanglesPerRow * numRectanglesPerCol;
+
+	int rectWidth = w / numRectanglesPerRow;  // Largeur de chaque rectangle
+	int rectHeight = h / numRectanglesPerCol; // Hauteur de chaque rectangle
+
+	for (int rectIndex : rectanglesToModify) {
+		if (rectIndex < 0 || rectIndex >= totalRectangles) {
+			continue; // Ignorer les indices invalides
+		}
+
+		int rectRow = rectIndex / numRectanglesPerRow;
+		int rectCol = rectIndex % numRectanglesPerRow;
+
+		int startX = rectCol * rectWidth;
+		int startY = rectRow * rectHeight;
+		int endX = (rectCol + 1) * rectWidth;
+		int endY = (rectRow + 1) * rectHeight;
+
+		// Assurez-vous de ne pas dépasser les limites de l'image
+		endX = std::min(endX, w);
+		endY = std::min(endY, h);
+
+		for (int y = startY; y < endY; ++y) {
+			for (int x = startX; x < endX; ++x) {
+				size_t i = (y * w + x) * channels;
+				int rgb = (data[i] + data[i + 1] + data[i + 2]);
+
+				if (condition(rgb)) {
+					uint8_t value = transformation();
+					data[i] = data[i + 1] = data[i + 2] = value;
+				}
+			}
+		}
+	}
+	return *this;
+}
+
+Image& Image::darkenBelowThresholdRegionFraction(int s, int fraction, const std::vector<int>& rectanglesToModify) {
+	return applyThresholdTransformationRegionFraction(
+		3 * s,
+		fraction,
+		rectanglesToModify,
+		[s](int rgb) { return rgb < 3 * s; },
+		[]() { return 0; }
+	);
+}
+
+Image& Image::whitenBelowThresholdRegionFraction(int s, int fraction, const std::vector<int>& rectanglesToModify) {
+	return applyThresholdTransformationRegionFraction(
+		3 * s,
+		fraction,
+		rectanglesToModify,
+		[s](int rgb) { return rgb < 3 * s; },
+		[]() { return 255; }
+	);
+}
+
+Image& Image::darkenAboveThresholdRegionFraction(int s, int fraction, const std::vector<int>& rectanglesToModify) {
+	return applyThresholdTransformationRegionFraction(
+		3 * s,
+		fraction,
+		rectanglesToModify,
+		[s](int rgb) { return rgb > 3 * s; },
+		[]() { return 0; }
+	);
+}
+
+Image& Image::whitenAboveThresholdRegionFraction(int s, int fraction, const std::vector<int>& rectanglesToModify) {
+	return applyThresholdTransformationRegionFraction(
+		3 * s,
+		fraction,
+		rectanglesToModify,
+		[s](int rgb) { return rgb > 3 * s; },
+		[]() { return 255; }
+	);
+}
+
+
 
 Image& Image::std_convolve_clamp_to_0(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc) {
 	uint8_t new_data[w*h];
@@ -507,70 +675,6 @@ Image& Image::grayscale_avg() {
 	return *this;
 }
 
-Image& Image::darkenBelowThreshold(int s) {  //the blacked pixels become black
-	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
-		//black or white : modified line from grayscale_avg right above
-		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb < 3*s) {
-			data[i] = data[i + 1] = data[i + 2] = 0;    // used to be memset(data+i, 0, 3);
-		}
-	}
-	return *this;
-}
-
-Image& Image::whitenBelowThreshold(int s) {	//the blackest pixels become white
-	for(size_t i = 0; i < size; i += channels) {
-		int rgb = (data[i] + data[i + 1] + data[i + 2]);
-		if (rgb < 3 * s) {
-			data[i] = data[i + 1] = data[i + 2] = 255;
-		}
-	}
-	return *this;
-}
-
-Image& Image::darkenAboveThreshold(int s) {  //the whitest pixels become black
-	for(size_t i = 0; i < size; i+=channels) {
-		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb > 3*s) {
-			data[i] = data[i + 1] = data[i + 2] = 0;    
-		}
-	}
-	return *this;
-}
-
-Image& Image::whitenAboveThreshold(int s) {    //the whitest pixels become white
-	for(size_t i = 0; i < size; i+=channels) {
-		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb > 3*s) {
-			data[i] = data[i + 1] = data[i + 2] = 255; 
-		}
-	}
-	return *this;
-}
-
-Image& Image::black_to_white(int s) {    
-	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
-		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb < 3*s) {
-			data[i] = data[i + 1] = data[i + 2] = 255;
-		} else {
-			data[i] = data[i + 1] = data[i + 2] = 0;
-		}
-	}
-	return *this;
-}
-
-Image& Image::white_to_black(int s) { 
-	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
-		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb > 3*s) {
-			data[i] = data[i + 1] = data[i + 2] = 255;
-		} else {
-			data[i] = data[i + 1] = data[i + 2] = 0;
-		}
-	}
-	return *this;
-}
 
 Image& Image::grayscale_lum() {
 	if(channels < 3) {
@@ -780,14 +884,6 @@ Image& Image::overlayText(const char* txt, const Font& font, int x, int y, uint8
 	return *this;
 }
 */
-
-
-
-
-
-
-
-
 
 
 
