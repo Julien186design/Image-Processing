@@ -129,7 +129,7 @@ void processImageTransforms(
     // Define output directories for each transformation
     std::vector<std::string> outputDirs = {
         "Output/BTB/", "Output/BTW/", "Output/WTB/",
-        "Output/WTW/", "Output/BTOW/", "Output/WTOB/"
+        "Output/WTW/", "Output/Reversed black and white/", "Output/Original black and white/"
     };
 
     std::vector<std::string> partialOutputDirs;
