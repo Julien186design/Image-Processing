@@ -90,18 +90,16 @@ struct Image {
 	Image& darkenBelowThreshold(int s);
 	Image& whitenBelowThreshold(int s);
 
-	Image& black_to_white(int s);
-	Image& white_to_black(int s);
-	/*
-	Image& darkenBelowThresholdRegionFraction(int s, float fraction);
-	Image& whitenBelowThresholdRegionFraction(int s, float fraction);
-	Image& darkenAboveThresholdRegionFraction(int s, float fraction);
-	Image& whitenAboveThresholdRegionFraction(int s, float fraction);
-	*/
+	Image& reversed_black_and_white(int s);
+	Image& original_black_and_white(int s);
+
+	Image& one_color_at_a_time_and_thoroughly();
+
 	Image& darkenBelowThresholdRegionFraction(int s, int fraction, const std::vector<int>& rectanglesToModify);
 	Image& whitenBelowThresholdRegionFraction(int s, int fraction, const std::vector<int>& rectanglesToModify);
 	Image& darkenAboveThresholdRegionFraction(int s, int fraction, const std::vector<int>& rectanglesToModify);
 	Image& whitenAboveThresholdRegionFraction(int s, int fraction, const std::vector<int>& rectanglesToModify);
+
 
 	Image& grayscale_lum();
 
