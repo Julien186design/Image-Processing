@@ -6,15 +6,16 @@
  *CLion on Linux Mint
  *Run/Edit Configurations
  *Working directory : $PROJECT8DIR$ | /[...]/CLion Projects/Image Processing
-*/
-#include <stb_image.h>
-#include <stb_image_write.h>
 
-/*
+
  *Dev-C++ on Windows
  *#include "stb_image.h"
  *#include "stb_image_write.h"
 */
+#include <stb_image.h>
+#include <stb_image_write.h>
+
+
 #include "Image.h"
 
 
@@ -89,10 +90,10 @@ ImageType Image::get_file_type(const char* filename) {
 }
 
 Image& Image::darkenBelowThreshold(int s) {  //the blacked pixels become black
+	const int threshold3 = 3 * s;
 	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
-		//black or white : modified line from grayscale_avg right above
 		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb < 3*s) {
+		if (rgb < threshold3) {
 			data[i] = data[i + 1] = data[i + 2] = 0;    // used to be memset(data+i, 0, 3);
 		}
 	}
@@ -100,9 +101,10 @@ Image& Image::darkenBelowThreshold(int s) {  //the blacked pixels become black
 }
 
 Image& Image::whitenBelowThreshold(int s) {	//the blackest pixels become white
+	const int threshold3 = 3 * s;
 	for(size_t i = 0; i < size; i += channels) {
 		int rgb = (data[i] + data[i + 1] + data[i + 2]);
-		if (rgb < 3 * s) {
+		if (rgb < threshold3) {
 			data[i] = data[i + 1] = data[i + 2] = 255;
 		}
 	}
@@ -110,9 +112,10 @@ Image& Image::whitenBelowThreshold(int s) {	//the blackest pixels become white
 }
 
 Image& Image::darkenAboveThreshold(int s) {  //the whitest pixels become black
+	const int threshold3 = 3 * s;
 	for(size_t i = 0; i < size; i+=channels) {
 		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb > 3*s) {
+		if (rgb > threshold3) {
 			data[i] = data[i + 1] = data[i + 2] = 0;
 		}
 	}
@@ -120,19 +123,21 @@ Image& Image::darkenAboveThreshold(int s) {  //the whitest pixels become black
 }
 
 Image& Image::whitenAboveThreshold(int s) {    //the whitest pixels become white
+	const int threshold3 = 3 * s;
 	for(size_t i = 0; i < size; i+=channels) {
 		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb > 3*s) {
+		if (rgb > threshold3) {
 			data[i] = data[i + 1] = data[i + 2] = 255;
 		}
 	}
 	return *this;
 }
 
-Image& Image::black_to_white(int s) {
+Image& Image::original_black_and_white(int s) {
+	const int threshold3 = 3 * s;
 	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
 		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb < 3*s) {
+		if (rgb > threshold3) {
 			data[i] = data[i + 1] = data[i + 2] = 255;
 		} else {
 			data[i] = data[i + 1] = data[i + 2] = 0;
@@ -141,10 +146,11 @@ Image& Image::black_to_white(int s) {
 	return *this;
 }
 
-Image& Image::white_to_black(int s) {
+Image& Image::reversed_black_and_white(int s) {
+	const int threshold3 = 3 * s;
 	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
 		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb > 3*s) {
+		if (rgb < threshold3) {
 			data[i] = data[i + 1] = data[i + 2] = 255;
 		} else {
 			data[i] = data[i + 1] = data[i + 2] = 0;
@@ -152,23 +158,46 @@ Image& Image::white_to_black(int s) {
 	}
 	return *this;
 }
-/*
-Image& Image::applyThresholdTransformationRegionFraction(int threshold, float fraction, std::function<bool(int)> condition, std::function<uint8_t()> transformation) {
-	uint16_t roi_width = static_cast<uint16_t>(w * fraction);
-	uint16_t roi_height = static_cast<uint16_t>(h * fraction);
-	for (uint16_t y = 0; y < roi_height; ++y) {
-		for (uint16_t x = 0; x < roi_width; ++x) {
-			size_t i = (y * w + x) * channels;
-			int rgb = (data[i] + data[i + 1] + data[i + 2]);
-			if (condition(rgb)) {
-				uint8_t value = transformation();
-				data[i] = data[i + 1] = data[i + 2] = value;
-			}
+
+Image& Image::one_color_at_a_time_and_thoroughly() {
+	for(size_t i = 0; i < size; i += static_cast<size_t>(channels)) {
+		uint8_t r = data[i];
+		uint8_t g = data[i + 1];
+		uint8_t b = data[i + 2];
+
+		if (r > g && r > b) {
+			data[i] = 255;     // R
+			data[i + 1] = 0;   // G
+			data[i + 2] = 0;   // B
+		} else if (g > r && g > b) {
+			data[i] = 0;       // R
+			data[i + 1] = 255; // G
+			data[i + 2] = 0;   // B
+		} else if (b > r && b > g) {
+			data[i] = 0;       // R
+			data[i + 1] = 0;   // G
+			data[i + 2] = 255; // B
+		} else if (r == g && r > b) {
+			data[i] = 255;       // R
+			data[i + 1] = 255;   // G
+			data[i + 2] = 0; // B
+		} else if (r == b && r > g) {
+			data[i] = 255;       // R
+			data[i + 1] = 0;   // G
+			data[i + 2] = 255; // B
+		} else if (g == b && g > r) {
+			data[i] = 0;       // R
+			data[i + 1] = 255;   // G
+			data[i + 2] = 255; // B
 		}
 	}
 	return *this;
 }
-*/
+
+
+
+//fraction by rectangles
+
 Image& Image::applyThresholdTransformationRegionFraction(
 	int threshold,
 	int fraction,
