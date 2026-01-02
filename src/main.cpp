@@ -1,6 +1,9 @@
 #include "ImageProcessing.h"
 
+#include <chrono>
+
 int main() {
+	auto start = std::chrono::high_resolution_clock::now();
     const std::string inputFile = "Oreo Cake.jpg";
     const std::string folderName = "Food";
 
@@ -18,10 +21,14 @@ int main() {
     
     // Load the image from the input path
     std::string inputPath = "Input/" + folderName + "/" + inputFile;
-    printf("%s\n", inputPath.c_str()); // Print the input path
     printf("%s\n", folderName.c_str()); // Print the folder name
         
 	processImageTransforms(inputPath, baseName, threshold, lastThreshold, step, fraction, rectanglesToModify, totalT, partialT);
+
+	auto end = std::chrono::high_resolution_clock::now();
+	auto duration = std::chrono::duration_cast<std::chrono::seconds>(end - start);
+
+	printf("Temps d'exécution: %ld s\n", duration.count());
 
     return 0;
 }
