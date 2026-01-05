@@ -1,12 +1,11 @@
 #include "ImageProcessing.h"
+#include "TransformationsConfig.h"
 #include <vector>
 #include <functional>
 #include <string>
-#include <algorithm>
 #include <cstring>
 
-using TransformationFunc = std::function<void(Image&, int)>;
-using PartialTransformationFunc = std::function<void(Image&, int, int, const std::vector<int>&)>;
+
 
 void applyAndSaveTransformations(
     const Image& baseImage,
@@ -17,30 +16,101 @@ void applyAndSaveTransformations(
     int threshold,
     int lastThreshold,
     int step,
-    bool saveAt120 = true)
+    bool saveAt120 = true,
+    const std::string& folder120 = DEFAULT_120_FOLDER
+    )
 {
     Image modified(baseImage.w, baseImage.h, baseImage.channels);
 
     for (int t = threshold; t <= lastThreshold; t += step) {
         for (size_t i = 0; i < transforms.size(); ++i) {
-            // Restaurer l'image originale (copie optimisée)
+
             memcpy(modified.data, baseImage.data, baseImage.size);
 
-            // Appliquer la transformation
             transforms[i](modified, t);
 
-            // Sauvegarder
             std::string outputPath = outputDirs[i] + baseName + " - "
                 + suffixes[i] + " " + std::to_string(t) + ".png";
             modified.write(outputPath.c_str());
 
-            // Sauvegarde spéciale pour t=120
             if (saveAt120 && t == 120) {
-                std::string specialPath = "Output/120/" + baseName
+                std::string specialPath = folder120 + baseName
                     + " - " + suffixes[i] + " 120.png";
                 modified.write(specialPath.c_str());
             }
         }
+    }
+}
+
+void applyAndSaveReversalTransformations(
+    const Image& baseImage,
+    const std::vector<TransformationFunc>& transforms,
+    const std::vector<std::string>& outputDirs,
+    const std::vector<std::string>& suffixes,
+    const std::string& baseName,
+    int threshold,
+    int lastThreshold,
+    int step,
+    bool saveAt120 = true,
+    const std::string& folder120 = DEFAULT_120_FOLDER
+    )
+{
+    Image modified(baseImage.w, baseImage.h, baseImage.channels);
+
+    for (int t = threshold; t <= lastThreshold; t += step) {
+        for (size_t i = 0; i < transforms.size(); ++i) {
+
+            memcpy(modified.data, baseImage.data, baseImage.size);
+
+            transforms[i](modified, t);
+
+            std::string outputPath = outputDirs[i] + baseName + " Reversal - "
+                + suffixes[i] + " " + std::to_string(t) + ".png";
+            modified.write(outputPath.c_str());
+
+            if (saveAt120 && t == 120) {
+                std::string specialPath = "Output/120/" + baseName
+                    + " Reversal - " + suffixes[i] + " 120.png";
+                modified.write(specialPath.c_str());
+            }
+        }
+    }
+}
+
+
+void applyAndSaveAlternatingTransformations(
+    const Image& baseImage,
+    const std::vector<AlternatingTransformation>& transforms,
+    const std::vector<std::string>& outputDirs,
+    const std::vector<std::string>& suffixes,
+    const std::string& baseName,
+    int threshold,
+    int lastThreshold,
+    int step,
+    bool saveAt120 = true,
+    const std::string& folder120 = DEFAULT_120_FOLDER
+    )
+{
+    Image modified(baseImage.w, baseImage.h, baseImage.channels);
+
+    for (int t = threshold; t <= lastThreshold; t += step) {
+        for (size_t i = 0; i < transforms.size(); ++i) {
+
+            memcpy(modified.data, baseImage.data, baseImage.size);
+
+            transforms[i](modified, t, t, t);
+
+            std::string outputPath = outputDirs[i] + baseName + " Alternating - "
+                + suffixes[i] + " " + std::to_string(t) + ".png";
+            modified.write(outputPath.c_str());
+
+            if (saveAt120 && t == 120) {
+                std::string specialPath = folder120 + baseName
+                    + " Alternating - " + suffixes[i] + " 120.png";
+                modified.write(specialPath.c_str());
+            }
+        }
+
     }
 }
 
@@ -61,13 +131,11 @@ void applyAndSavePartialTransformations(
 
     for (int t = threshold; t <= lastThreshold; t += step) {
         for (size_t i = 0; i < transforms.size(); ++i) {
-            // Restaurer l'image originale
+
             memcpy(modified.data, baseImage.data, baseImage.size);
 
-            // Appliquer la transformation partielle
             transforms[i](modified, t, fraction, rectanglesToModify);
 
-            // Sauvegarder
             std::string outputPath = outputDirs[i] + baseName + " - "
                 + suffixes[i] + " " + std::to_string(t) + ".png";
             modified.write(outputPath.c_str());
@@ -75,91 +143,108 @@ void applyAndSavePartialTransformations(
     }
 }
 
+void oneColorTransformations(
+    const Image& baseImage,
+    const std::string& baseName,
+    const std::vector<int>& tolerance)
+{
+    const int start = tolerance[0];
+    const int end   = tolerance[1];
+    const int step  = tolerance[2];
+
+    for (int t = start; t <= end; t += step) {
+        Image oneColorImage = baseImage;
+        oneColorImage.simplify_to_dominant_color_combinations(t);
+        std::string oneColorOutputPath;
+        oneColorOutputPath = "Output/One Color/" + baseName + " - Tolerance " + std::to_string(t) +
+                             ".png";
+        oneColorImage.write(oneColorOutputPath.c_str());
+    }
+}
+
 void processImageTransforms(
     const std::string& inputPath,
     const std::string& baseName,
-    int threshold,
-    int lastThreshold,
+    int first_threshold,
+    int last_threshold,
     int step,
     int fraction,
     const std::vector<int>& rectanglesToModify,
-    bool totalT,
-    bool partialT)
+    const std::vector<int>& tolerance,
+    bool totalStepByStepT,
+    bool totalBlackAndWhiteT,
+    bool totalReversalT,
+    bool partialT,
+    bool alternatingBlackAndWhite,
+    bool oneColor
+    )
 {
     Image image(inputPath.c_str());
 
-    // Define the transformation functions
-    std::vector<TransformationFunc> transformations = {
-        [](Image& img, int i) { img.darkenBelowThreshold(i); },
-        [](Image& img, int i) { img.whitenBelowThreshold(i); },
-        [](Image& img, int i) { img.darkenAboveThreshold(i); },
-        [](Image& img, int i) { img.whitenAboveThreshold(i); },
-        [](Image& img, int i) { img.black_to_white(i); },
-        [](Image& img, int i) { img.white_to_black(i); }
-    };
-
-    std::vector<PartialTransformationFunc> partialTransformationsFunc = {
-        [](Image& img, int i, int fraction, const std::vector<int>& rectanglesToModify) {
-            img.darkenBelowThresholdRegionFraction(i, fraction, rectanglesToModify);
-        },
-        [](Image& img, int i, int fraction, const std::vector<int>& rectanglesToModify) {
-            img.whitenBelowThresholdRegionFraction(i, fraction, rectanglesToModify);
-        },
-        [](Image& img, int i, int fraction, const std::vector<int>& rectanglesToModify) {
-            img.darkenAboveThresholdRegionFraction(i, fraction, rectanglesToModify);
-        },
-        [](Image& img, int i, int fraction, const std::vector<int>& rectanglesToModify) {
-            img.whitenAboveThresholdRegionFraction(i, fraction, rectanglesToModify);
-        }
-    };
-
-    // Define suffixes for the output file names
-    std::vector<std::string> suffixes = {
-        "BTB", "BTW", "WTB", "WTW",
-        "Reversed black and white", "Original black and white"
-    };
-
-    std::vector<std::string> partialSuffixes;
-    std::transform(
-        suffixes.begin(), suffixes.end(),
-        std::back_inserter(partialSuffixes),
-        [](const std::string& s) { return s + " Partial"; }
-    );
-
-    // Define output directories for each transformation
-    std::vector<std::string> outputDirs = {
-        "Output/BTB/", "Output/BTW/", "Output/WTB/",
-        "Output/WTW/", "Output/Reversed black and white/", "Output/Original black and white/"
-    };
-
-    std::vector<std::string> partialOutputDirs;
-    std::transform(
-        outputDirs.begin(), outputDirs.end(),
-        std::back_inserter(partialOutputDirs),
-        [](const std::string& s) {
-            if (s.empty()) return s;
-            return s.substr(0, s.size() - 1) + " Square/";
-        }
-    );
-
     // One Color transformation
-    Image oneColorImage = image;
-    oneColorImage.one_color_at_a_time_and_thoroughly();
-    std::string oneColorOutputPath = "Output/One Color/" + baseName + " - One Color.png";
-    oneColorImage.write(oneColorOutputPath.c_str());
+    if (oneColor) {
+        oneColorTransformations(image, baseName, tolerance);
+    }
 
 
-    if (totalT) {
+
+    if (totalStepByStepT) {
         applyAndSaveTransformations(
             image,
-            transformations,
-            outputDirs,
-            suffixes,
+            total_step_by_step_transformations,
+            total_step_by_stepoutput_dirs,
+            total_step_by_step_suffixes,
             baseName,
-            threshold,
-            lastThreshold,
+            first_threshold,
+            last_threshold,
             step,
-            true  // saveAt120
+            true,  // saveAt120
+            DEFAULT_120_FOLDER
+        );
+    }
+
+    if (totalReversalT) {
+        applyAndSaveReversalTransformations(
+            image,
+            total_reversal_step_by_step_transformations,
+            total_step_by_stepoutput_dirs,
+            total_step_by_step_suffixes,
+            baseName,
+            first_threshold,
+            last_threshold,
+            step,
+            true,  // saveAt120
+            DEFAULT_120_FOLDER
+        );
+    }
+
+    if (alternatingBlackAndWhite) {
+        applyAndSaveAlternatingTransformations(
+            image,
+            total_alternating_black_and_white_transformations,
+            total_step_by_stepoutput_dirs,
+            total_step_by_step_suffixes,
+            baseName,
+            first_threshold,
+            last_threshold,
+            step,
+            true,  // saveAt120
+            DEFAULT_120_FOLDER
+        );
+    }
+
+    if (totalBlackAndWhiteT) {
+        applyAndSaveTransformations(
+            image,
+            total_black_and_white_transformations,
+            total_black_and_white_output_dirs,
+            total_black_and_white_suffixes,
+            baseName,
+            first_threshold,
+            last_threshold,
+            step,
+            true,  // saveAt120
+            DEFAULT_120_FOLDER
         );
     }
 
@@ -167,11 +252,11 @@ void processImageTransforms(
         applyAndSavePartialTransformations(
             image,
             partialTransformationsFunc,
-            partialOutputDirs,
-            partialSuffixes,
+            generatePartialOutputDirs(),
+            generatePartialSuffixes(),
             baseName,
-            threshold,
-            lastThreshold,
+            first_threshold,
+            last_threshold,
             step,
             fraction,
             rectanglesToModify
