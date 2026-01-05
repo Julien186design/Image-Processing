@@ -9,13 +9,18 @@
 void processImageTransforms(
     const std::string& inputPath,
     const std::string& baseName,
-    int threshold,
-    int lastThreshold,
+    int first_threshold,
+    int last_threshold,
     int step,
     int fraction,
     const std::vector<int>& rectanglesToModify,
-    bool totalT,
-    bool partialT
+    const std::vector<int>&  tolerance,
+    bool totalStepByStepT,
+    bool totalBlackAndWhiteT,
+    bool totalReversalT,
+    bool partialT,
+    bool alternatingBlackAndWhite,
+    bool oneColor
 );
 
 #endif
