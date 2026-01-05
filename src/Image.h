@@ -55,6 +55,10 @@ struct Image {
 		std::function<uint8_t()> transformation
 	);
 
+	static inline bool approx_equal(uint8_t a, uint8_t b, uint8_t tol) {
+		return std::abs(static_cast<int>(a) - static_cast<int>(b)) <= tol;
+	}
+
 
 	static uint32_t rev(uint32_t n, uint32_t a);
 	static void bit_rev(uint32_t n, std::complex<double> a[], std::complex<double>* A);
@@ -85,15 +89,21 @@ struct Image {
 
 	Image& applyThresholdTransformationRegionFraction(int threshold, float fraction, std::function<bool(int)> condition, std::function<uint8_t()> transformation);
 
-	Image& darkenAboveThreshold(int s);
-	Image& whitenAboveThreshold(int s);
 	Image& darkenBelowThreshold(int s);
 	Image& whitenBelowThreshold(int s);
+	Image& darkenAboveThreshold(int s);
+	Image& whitenAboveThreshold(int s);
+
+	Image& reverseBelowThreshold(int s);
+	Image& reverseAboveThreshold(int s);
+
+	Image& alternatelyDarkenAndWhitenBelowTheThreshold(int s, int first_threshold,	int last_threshold);
+	Image& alternatelyDarkenAndWhitenAboveTheThreshold(int s, int first_threshold,	int last_threshold);
 
 	Image& reversed_black_and_white(int s);
 	Image& original_black_and_white(int s);
 
-	Image& one_color_at_a_time_and_thoroughly();
+	Image& simplify_to_dominant_color_combinations(int tolerance);
 
 	Image& darkenBelowThresholdRegionFraction(int s, int fraction, const std::vector<int>& rectanglesToModify);
 	Image& whitenBelowThresholdRegionFraction(int s, int fraction, const std::vector<int>& rectanglesToModify);
