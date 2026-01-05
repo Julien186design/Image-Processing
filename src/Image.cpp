@@ -14,6 +14,7 @@
 */
 #include <stb_image.h>
 #include <stb_image_write.h>
+#include <emmintrin.h> // Header SSE2
 
 
 #include "Image.h"
@@ -100,6 +101,50 @@ Image& Image::darkenBelowThreshold(int s) {  //the blacked pixels become black
 	return *this;
 }
 
+/*
+Image& Image::darkenBelowThreshold(int s) {
+	const int threshold3 = 3 * s;
+
+#ifdef __SSE2__  // Compile seulement si SSE2 disponible
+	// Version vectorisée SSE2 (traite 16 pixels RGB à la fois)
+	const __m128i zero = _mm_setzero_si128();
+	const __m128i threshold_vec = _mm_set1_epi8(threshold3);
+
+	size_t i = 0;
+	// Traiter par blocs de 16 octets (5 pixels + 1 octet)
+	for (; i + 16 <= size; i += 16) {
+		__m128i pixels = _mm_loadu_si128((__m128i*)(data + i));
+
+		// Comparer chaque octet avec seuil
+		__m128i mask = _mm_cmplt_epi8(pixels, threshold_vec);
+
+		// Mettre à zéro les pixels sous le seuil
+		pixels = _mm_andnot_si128(mask, pixels);
+
+		_mm_storeu_si128((__m128i*)(data + i), pixels);
+	}
+
+	// Traiter les pixels restants
+	for (; i < size; i += channels) {
+		int rgb = (data[i] + data[i+1] + data[i+2]);
+		if (rgb < threshold3) {
+			data[i] = data[i+1] = data[i+2] = 0;
+		}
+	}
+	#else
+	// Version standard si SSE2 non disponible
+	for (size_t i = 0; i < size; i += channels) {
+		int rgb = (data[i] + data[i+1] + data[i+2]);
+		if (rgb < threshold3) {
+			data[i] = data[i+1] = data[i+2] = 0;
+		}
+	}
+	#endif
+
+	return *this;
+}
+*/
+
 Image& Image::whitenBelowThreshold(int s) {	//the blackest pixels become white
 	const int threshold3 = 3 * s;
 	for(size_t i = 0; i < size; i += channels) {
@@ -133,6 +178,32 @@ Image& Image::whitenAboveThreshold(int s) {    //the whitest pixels become white
 	return *this;
 }
 
+Image& Image::reverseAboveThreshold(int s) {
+	const int threshold3 = 3 * s;
+	for(size_t i = 0; i < size; i += channels) {
+		int rgb = (data[i] + data[i + 1] + data[i + 2]);
+		if (rgb < threshold3) {
+			data[i] = 255 - data[i];
+			data[i + 1] = 255 - data[i + 1];
+			data[i + 2] = 255 - data[i + 2];
+		}
+	}
+	return *this;
+}
+
+Image& Image::reverseBelowThreshold(int s) {
+	const int threshold3 = 3 * s;
+	for(size_t i = 0; i < size; i+=channels) {
+		int rgb = (data[i] + data[i+1] + data[i+2]);
+		if (rgb > threshold3) {
+			data[i] = 255 - data[i];
+			data[i + 1] = 255 - data[i + 1];
+			data[i + 2] = 255 - data[i + 2];
+		}
+	}
+	return *this;
+}
+
 Image& Image::original_black_and_white(int s) {
 	const int threshold3 = 3 * s;
 	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
@@ -146,54 +217,96 @@ Image& Image::original_black_and_white(int s) {
 	return *this;
 }
 
-Image& Image::reversed_black_and_white(int s) {
+Image& Image::alternatelyDarkenAndWhitenBelowTheThreshold(int s, int first_threshold,	int last_threshold) {
 	const int threshold3 = 3 * s;
 	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
 		int rgb = (data[i] + data[i+1] + data[i+2]);
 		if (rgb < threshold3) {
-			data[i] = data[i + 1] = data[i + 2] = 255;
-		} else {
 			data[i] = data[i + 1] = data[i + 2] = 0;
 		}
 	}
 	return *this;
 }
 
-Image& Image::one_color_at_a_time_and_thoroughly() {
-	for(size_t i = 0; i < size; i += static_cast<size_t>(channels)) {
-		uint8_t r = data[i];
-		uint8_t g = data[i + 1];
-		uint8_t b = data[i + 2];
-
-		if (r > g && r > b) {
-			data[i] = 255;     // R
-			data[i + 1] = 0;   // G
-			data[i + 2] = 0;   // B
-		} else if (g > r && g > b) {
-			data[i] = 0;       // R
-			data[i + 1] = 255; // G
-			data[i + 2] = 0;   // B
-		} else if (b > r && b > g) {
-			data[i] = 0;       // R
-			data[i + 1] = 0;   // G
-			data[i + 2] = 255; // B
-		} else if (r == g && r > b) {
-			data[i] = 255;       // R
-			data[i + 1] = 255;   // G
-			data[i + 2] = 0; // B
-		} else if (r == b && r > g) {
-			data[i] = 255;       // R
-			data[i + 1] = 0;   // G
-			data[i + 2] = 255; // B
-		} else if (g == b && g > r) {
-			data[i] = 0;       // R
-			data[i + 1] = 255;   // G
-			data[i + 2] = 255; // B
+Image& Image::alternatelyDarkenAndWhitenAboveTheThreshold(int s, int first_threshold,	int last_threshold) {
+	const int threshold3 = 3 * s;
+	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
+		int rgb = (data[i] + data[i+1] + data[i+2]);
+		if (rgb > threshold3) {
+			data[i] = data[i + 1] = data[i + 2] = 0;
 		}
 	}
 	return *this;
 }
 
+Image& Image::reversed_black_and_white(int s) {
+	const int threshold3 = 3 * s;
+	for (size_t i = 0; i < size; i += channels) {
+
+		int rgb = data[i] + data[i + 1] + data[i + 2];
+
+		uint8_t value = (rgb < threshold3) ? 255 : 0;
+
+		data[i] = data[i + 1] = data[i + 2] = value;
+	}
+	return *this;
+}
+
+
+Image& Image::simplify_to_dominant_color_combinations(int tolerance) {
+	const uint8_t ONE_THIRD = 85;
+	const uint8_t HALF = 127;
+	const uint8_t FULL = 255;
+
+
+	for (size_t i = 0; i < size; i += channels) {
+		uint8_t r = data[i];
+		uint8_t g = data[i + 1];
+		uint8_t b = data[i + 2];
+
+		bool r_eq_g = approx_equal(r, g, tolerance);
+		bool r_eq_b = approx_equal(r, b, tolerance);
+		bool g_eq_b = approx_equal(g, b, tolerance);
+
+
+		// Case 1: All three color channels are equal
+		if (r_eq_g && r_eq_b) {
+			data[i] = data[i + 1] = data[i + 2] = ONE_THIRD;
+			continue;
+		}
+
+		// Case 2: Two color channels are equal and greater than the third
+		if (r_eq_g) {
+			if (r > b + tolerance) {
+				data[i] = data[i + 1] = HALF; data[i + 2] = 0;
+			} else {
+				data[i] = data[i + 1] = 0; data[i + 2] = HALF;
+			}
+		} else if (r_eq_b) {
+			if (r > g + tolerance) {
+				data[i] = data[i + 2] = HALF; data[i + 1] = 0;
+			} else {
+				data[i] = data[i + 2] = 0; data[i + 1] = HALF;
+			}
+		} else if (g_eq_b) {
+			if (g > r + tolerance) {
+				data[i + 1] = data[i + 2] = HALF; data[i] = 0;
+			} else {
+				data[i + 1] = data[i + 2] = 0; data[i] = HALF;
+			}
+		}
+		// Case 3: All three color channels are distinct, in descending order
+		else {
+			if (r > g && g > b) { data[i] = FULL; data[i + 1] = HALF; data[i + 2] = 0; }
+			else if (r > b && b > g) { data[i] = FULL; data[i + 1] = 0; data[i + 2] = HALF; }
+			else if (g > r && r > b) { data[i] = HALF; data[i + 1] = FULL; data[i + 2] = 0; }
+			else if (g > b && b > r) { data[i] = 0; data[i + 1] = FULL; data[i + 2] = HALF; }
+			else if (b > r && r > g) { data[i] = HALF; data[i + 1] = 0; data[i + 2] = FULL; }
+			else if (b > g && g > r) { data[i] = 0; data[i + 1] = HALF; data[i + 2] = FULL; }
+		}
+	}
+	return *this;
+}
 
 
 //fraction by rectangles
