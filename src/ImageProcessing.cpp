@@ -343,9 +343,7 @@ void oneColorTransformations(
 void processImageTransforms(
     const std::string& inputPath,
     const std::string& baseName,
-    const int first_threshold,
-    const int last_threshold,
-    const int step,
+    const std::vector<int>& thresholdsAndStep,
     int fraction,
     const std::vector<int>& rectanglesToModify,
     const std::vector<int>& tolerance,
@@ -357,6 +355,10 @@ void processImageTransforms(
     bool oneColor
 ) {
     const Image image(inputPath.c_str());
+
+    const int first_threshold = thresholdsAndStep[0];
+    const int last_threshold = thresholdsAndStep[1];
+    const int step = thresholdsAndStep[2];
 
     // One Color transformation
     if (oneColor) {
