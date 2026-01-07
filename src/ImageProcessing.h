@@ -9,9 +9,7 @@
 void processImageTransforms(
     const std::string& inputPath,
     const std::string& baseName,
-    int first_threshold,
-    int last_threshold,
-    int step,
+    const std::vector<int>& thresholdsAndStep,
     int fraction,
     const std::vector<int>& rectanglesToModify,
     const std::vector<int>&  tolerance,
