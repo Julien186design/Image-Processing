@@ -19,7 +19,7 @@ int main() {
 	bool totalBlackAndWhiteT = false;
 	bool totalReversalT = false;
 	bool partialT = false;
-	bool alternatingBlackAndWhite = false;
+	bool alternatingBlackAndWhite = false; // the function is still under construction
 	bool oneColor = true;
     		
     // Extract the base name without the extension
