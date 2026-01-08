@@ -7,5 +7,5 @@ find "Output/One Color" -type f   -printf '%f\n' | sed 's/ - Tolerance.*//' | so
 Getting the names of the 20 largest files (useful to launch in the "Output" folder if processing time is getting important)
 find . -type f -exec du -h {} + | sort --human-numeric-sort --reverse | head -n 20
 
-Renaming all files whose name begin by "ABC-" to delete the first 4 characters. ("ABC-" is the example)
+Renaming all files whose name begin by "ABC-" to delete the first 4 characters. ("ABC-" is for the example)
 for f in "ABC-"*; do   mv "$f" "${f#ABC-}"; done
