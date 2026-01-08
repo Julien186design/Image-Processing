@@ -1,0 +1,8 @@
+Deleting all files in a folder (subfolders included)
+find . -type f -delete
+
+Getting all unique filenames that have been processed by “one color”
+find "Output/One Color" -type f   -printf '%f\n' | sed 's/ - Tolerance.*//' | sort -u
+
+Getting the names of the 20 largest files (useful to launch in the folder if processing time is getting important)
+find . -type f -exec du -h {} + | sort --human-numeric-sort --reverse | head -n 20
