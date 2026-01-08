@@ -11,6 +11,7 @@ To run the code, you need to create two folders: "Input" and "Output".
 "Output" must contain the following subfolders:
 "120",
 "BTB",
+
 "BTB Square",
 "BTW",
 "BTW Square",
