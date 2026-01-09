@@ -325,15 +325,38 @@ void oneColorTransformations(
     const int start = tolerance[0];
     const int end   = tolerance[1];
     const int step  = tolerance[2];
+    bool average = false;
+
+    const std::string oneColorFolder = "Output/One Color";
 
     for (int t = start; t <= end; t += step) {
-        Image oneColorImage = baseImage;
-        oneColorImage.simplify_to_dominant_color_combinations(t);
+        for (int i = 0; i < 2; ++i) {
+            Image oneColorImage = baseImage;
 
-        std::string outputPath = "Output/One Color/" + baseName +
-                                " - Tolerance " + std::to_string(t) + ".png";
-        oneColorImage.write(outputPath.c_str());
+            oneColorImage.simplify_to_dominant_color_combinations(t, average);
+
+            std::string outputPath = oneColorFolder + baseName + " - Average " + std::to_string(average) +
+                                    " - Tolerance " + std::to_string(t) + ".png";
+            oneColorImage.write(outputPath.c_str());
+
+            average = !average;
+        }
     }
+
+    std::string outputPath = oneColorFolder + baseName + " - Average " + std::to_string(average) +
+                        " - Tolerance " + std::to_string(start) + ".png";
+    Image image1(outputPath.c_str());
+
+    average = !average;
+
+    outputPath = oneColorFolder + baseName + " - Average " + std::to_string(average) +
+                        " - Tolerance " + std::to_string(start) + ".png";
+    Image image2(outputPath.c_str());
+
+    Image diff = image1;
+    diff.diffmap(image2);
+    outputPath = "Output/Diffmap/" + baseName + " - Diffmap - Tolerance " + std::to_string(start) + ".png";
+    diff.write(outputPath.c_str());
 }
 
 // ============================================================================
@@ -458,4 +481,6 @@ void processImageTransforms(
             partialParams
         );
     }
+
 }
+
