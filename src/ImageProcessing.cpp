@@ -327,7 +327,7 @@ void oneColorTransformations(
     const int step  = tolerance[2];
     bool average = false;
 
-    const std::string oneColorFolder = "Output/One Color";
+    const std::string oneColorFolder = "Output/One Color/";
 
     for (int t = start; t <= end; t += step) {
         for (int i = 0; i < 2; ++i) {
