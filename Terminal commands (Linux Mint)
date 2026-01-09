@@ -1,7 +1,7 @@
-Deleting all files in a folder (subfolders included)
+Deleting all files in a folder (subfolders included).
 find . -type f -delete
 
-Getting all unique filenames that have been processed by “one color”
+Getting all unique filenames in the "One Color" folder. Delete "Output/One Color" to run in the current folder.
 find "Output/One Color" -type f   -printf '%f\n' | sed 's/ - Tolerance.*//' | sort -u
 
 Getting the names of the 20 largest files (useful to launch in the "Output" folder if processing time is getting important)
