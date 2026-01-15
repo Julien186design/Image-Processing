@@ -1,36 +1,34 @@
 #include "ImageProcessing.h"
 
 #include <chrono>
-
+#include <omp.h>
+#include <iostream>
 
 
 int main() {
+	#pragma omp parallel
+	{
+		std::cout << "Thread " << omp_get_thread_num() << " sur " << omp_get_num_threads() << std::endl;
+	}
 	auto start = std::chrono::high_resolution_clock::now();
     const std::string inputFile = "Oreo Cake.jpg";
     const std::string folderName = "Food";
 	
-	std::vector<int> thresholdsAndStep = {30, 240, 30}; // {first_Threshold, last_Threshold, step}
-	int fraction = 2;
-	std::vector<int> tolerance = {0, 20, 1};
-	std::vector<int> rectanglesToModify = {0, 5, 10, 15};
-	bool totalStepByStepT = false;
-	bool totalBlackAndWhiteT = false;
-	bool totalReversalT = false;
-	bool partialT = true;
-	bool alternatingBlackAndWhite = false; // the function is still under construction
-	bool oneColor = false;
-    		
-    // Extract the base name without the extension
-    size_t dotPos = inputFile.find_last_of('.');
-    std::string baseName = inputFile.substr(0, dotPos);
+	const std::vector<int> thresholdsAndStep = {30, 250, 30}; // {first_Threshold, last_Threshold, step}
+	const std::vector<int> colorNuances = {0, 10, 20, 30, 40, 50, 60, 70, 80, 90};
+	constexpr int fraction = 2;
+	const std::vector<int> tolerance = {0, 1, 1};
+	const std::vector<int> rectanglesToModify = {0, 5, 10, 15};
+	constexpr bool severalColors = true;
+	constexpr bool totalBlackAndWhiteT = false;
+	constexpr bool totalReversalT = false;
+	constexpr bool partialT = false;
+	constexpr bool alternatingBlackAndWhite = false; // the function is still under construction
+	constexpr bool oneColor = false;
 
 
-    // Load the image from the input path
-    std::string inputPath = "Input/" + folderName + "/" + inputFile;
-    printf("%s\n", folderName.c_str()); // Print the folder name
-        
-	processImageTransforms(inputPath, baseName, thresholdsAndStep, fraction, rectanglesToModify, tolerance,
-		totalStepByStepT, totalBlackAndWhiteT, totalReversalT,
+	processImageTransforms(inputFile, folderName, thresholdsAndStep, colorNuances, fraction,
+		rectanglesToModify,	tolerance, severalColors, totalBlackAndWhiteT, totalReversalT,
 		partialT,alternatingBlackAndWhite, oneColor);
 
 	auto end = std::chrono::high_resolution_clock::now();
@@ -38,5 +36,5 @@ int main() {
 
 	printf("Execution time: %ld s\n", duration.count());
 
-    return 0;
+	return 0;
 }
