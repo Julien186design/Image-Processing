@@ -12,14 +12,17 @@ using ReverseTransformationFunc = std::function<void(Image&, int)>;
 using AlternatingTransformation = std::function<void(Image&, int, int, int)>;
 using PartialTransformationFunc = std::function<void(Image&, int, int, const std::vector<int>&)>;
 
+using TwoIntTransformation = std::function<void(Image&, int, int)>;
+
 constexpr const char* DEFAULT_120_FOLDER = "Output/120/";
 
-const std::vector<TransformationFunc> total_step_by_step_transformations = {
-    [](Image& img, int i) { img.darkenBelowThreshold(i); },
-    [](Image& img, int i) { img.whitenBelowThreshold(i); },
-    [](Image& img, int i) { img.darkenAboveThreshold(i); },
-    [](Image& img, int i) { img.whitenAboveThreshold(i); }
+const std::vector<TwoIntTransformation> colors_nuances_transformations = {
+    [](Image& img, const int i, const int cn){img.darkenBelowThreshold_ColorNuance(i, cn); },
+    [](Image& img, const int i, const int cn){img.whitenBelowThreshold_ColorNuance(i, cn); },
+    [](Image& img, const int i, const int cn){img.darkenAboveThreshold_ColorNuance(i, cn); },
+    [](Image& img, const int i, const int cn){img.whitenAboveThreshold_ColorNuance(i, cn); }
 };
+
 
 const std::vector<ReverseTransformationFunc> total_reversal_step_by_step_transformations = {
     [](Image& img, int i) { img.reverseAboveThreshold(i); },
@@ -56,8 +59,12 @@ const std::vector<std::string> total_step_by_step_suffixes = {
     "BTB", "BTW", "WTB", "WTW"
 };
 
+const std::vector<std::string> reversal_step_by_step_suffixes = {
+    "Reversal-BT", "Reversal-WT"
+};
+
 const std::vector<std::string> total_black_and_white_suffixes = {
-    "Original black and white", "Reversed black and white"
+    "Black and white - Original", "Black and white - Reversed"
 };
 
 
@@ -72,8 +79,12 @@ inline std::vector<std::string> generatePartialSuffixes() {
 }
 
 // Vecteurs de répertoires de sortie
-const std::vector<std::string> total_step_by_stepoutput_dirs = {
+const std::vector<std::string> total_step_by_step_output_dirs = {
     "Output/BTB/", "Output/BTW/", "Output/WTB/", "Output/WTW/"
+};
+
+const std::vector<std::string> reversal_step_by_step_output_dirs = {
+    "Output/Reversal-BT/", "Output/Reversal-WT/"
 };
 
 const std::vector<std::string> total_black_and_white_output_dirs = {
@@ -84,7 +95,7 @@ const std::vector<std::string> total_black_and_white_output_dirs = {
 inline std::vector<std::string> generatePartialOutputDirs() {
     std::vector<std::string> partialOutputDirs;
     std::transform(
-        total_step_by_stepoutput_dirs.begin(), total_step_by_stepoutput_dirs.end(),
+        total_step_by_step_output_dirs.begin(), total_step_by_step_output_dirs.end(),
         std::back_inserter(partialOutputDirs),
         [](const std::string& s) {
             if (s.empty()) return s;
