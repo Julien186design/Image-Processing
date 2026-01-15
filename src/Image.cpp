@@ -14,7 +14,9 @@
 */
 #include <stb_image.h>
 #include <stb_image_write.h>
-#include <emmintrin.h> // Header SSE2
+#include <immintrin.h>
+#include <cstdint>
+#include <cstring>
 
 
 #include "Image.h"
@@ -39,7 +41,10 @@ Image::Image(const Image& img) : Image(img.w, img.h, img.channels) {
 }
 
 Image::~Image() {
-	stbi_image_free(data);
+	// stbi_image_free(data);
+	if (data != nullptr) {
+		delete[] data;
+	}
 }
 
 bool Image::read(const char* filename, int channel_force) {
@@ -90,93 +95,48 @@ ImageType Image::get_file_type(const char* filename) {
 	return PNG;
 }
 
-Image& Image::darkenBelowThreshold(int s) {  //the blacked pixels become black
-	const int threshold3 = 3 * s;
+Image& Image::darkenBelowThreshold_ColorNuance(const int threshold, const int cn) {  //the blacked pixels become black
 	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
 		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb < threshold3) {
-			data[i] = data[i + 1] = data[i + 2] = 0;    // used to be memset(data+i, 0, 3);
+		if (rgb < threshold) {
+			data[i] = data[i + 1] = data[i + 2] = cn;    // used to be memset(data+i, 0, 3);
 		}
 	}
 	return *this;
 }
 
-/*
-Image& Image::darkenBelowThreshold(int s) {
-	const int threshold3 = 3 * s;
-
-#ifdef __SSE2__  // Compile seulement si SSE2 disponible
-	// Version vectorisée SSE2 (traite 16 pixels RGB à la fois)
-	const __m128i zero = _mm_setzero_si128();
-	const __m128i threshold_vec = _mm_set1_epi8(threshold3);
-
-	size_t i = 0;
-	// Traiter par blocs de 16 octets (5 pixels + 1 octet)
-	for (; i + 16 <= size; i += 16) {
-		__m128i pixels = _mm_loadu_si128((__m128i*)(data + i));
-
-		// Comparer chaque octet avec seuil
-		__m128i mask = _mm_cmplt_epi8(pixels, threshold_vec);
-
-		// Mettre à zéro les pixels sous le seuil
-		pixels = _mm_andnot_si128(mask, pixels);
-
-		_mm_storeu_si128((__m128i*)(data + i), pixels);
-	}
-
-	// Traiter les pixels restants
-	for (; i < size; i += channels) {
-		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb < threshold3) {
-			data[i] = data[i+1] = data[i+2] = 0;
-		}
-	}
-	#else
-	// Version standard si SSE2 non disponible
-	for (size_t i = 0; i < size; i += channels) {
-		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb < threshold3) {
-			data[i] = data[i+1] = data[i+2] = 0;
-		}
-	}
-	#endif
-
-	return *this;
-}
-*/
-
-Image& Image::whitenBelowThreshold(int s) {	//the blackest pixels become white
-	const int threshold3 = 3 * s;
+Image& Image::whitenBelowThreshold_ColorNuance(const int threshold, const int cn) {	//the blackest pixels become white
+	const int newColor = 255 - cn;
 	for(size_t i = 0; i < size; i += channels) {
 		int rgb = (data[i] + data[i + 1] + data[i + 2]);
-		if (rgb < threshold3) {
-			data[i] = data[i + 1] = data[i + 2] = 255;
+		if (rgb < threshold) {
+			data[i] = data[i + 1] = data[i + 2] = newColor;
 		}
 	}
 	return *this;
 }
 
-Image& Image::darkenAboveThreshold(int s) {  //the whitest pixels become black
-	const int threshold3 = 3 * s;
+Image& Image::darkenAboveThreshold_ColorNuance(const int threshold, const int cn) {  //the whitest pixels become black
 	for(size_t i = 0; i < size; i+=channels) {
 		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb > threshold3) {
-			data[i] = data[i + 1] = data[i + 2] = 0;
+		if (rgb > threshold) {
+			data[i] = data[i + 1] = data[i + 2] = cn;
 		}
 	}
 	return *this;
 }
 
-Image& Image::whitenAboveThreshold(int s) {    //the whitest pixels become white
-	const int threshold3 = 3 * s;
+Image& Image::whitenAboveThreshold_ColorNuance(const int threshold, const int cn) {    //the whitest pixels become white
+	const int newColor = 255 - cn;
 	for(size_t i = 0; i < size; i+=channels) {
 		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb > threshold3) {
-			data[i] = data[i + 1] = data[i + 2] = 255;
+		if (rgb > threshold) {
+			data[i] = data[i + 1] = data[i + 2] = newColor;
 		}
 	}
 	return *this;
 }
+
 
 Image& Image::reverseAboveThreshold(int s) {
 	const int threshold3 = 3 * s;
@@ -253,56 +213,81 @@ Image& Image::reversed_black_and_white(int s) {
 }
 
 
-Image& Image::simplify_to_dominant_color_combinations(int tolerance) {
-	const uint8_t ONE_THIRD = 85;
-	const uint8_t HALF = 127;
-	const uint8_t FULL = 255;
 
+Image& Image::simplify_to_dominant_color_combinations(int tolerance, bool average) {
 
 	for (size_t i = 0; i < size; i += channels) {
 		uint8_t r = data[i];
 		uint8_t g = data[i + 1];
 		uint8_t b = data[i + 2];
 
+		uint8_t r_one_third_avg = avg_u8_round(r, SimpleColors::ONE_THIRD);
+		uint8_t g_one_third_avg = avg_u8_round(g, SimpleColors::ONE_THIRD);
+		uint8_t b_one_third_avg = avg_u8_round(b, SimpleColors::ONE_THIRD);
+		
+		uint8_t r_half_avg = avg_u8_round(r, SimpleColors::HALF);
+		uint8_t g_half_avg = avg_u8_round(g, SimpleColors::HALF);
+		uint8_t b_half_avg = avg_u8_round(b, SimpleColors::HALF);
+
+		uint8_t r_full_avg = avg_u8_round(r, SimpleColors::FULL);
+		uint8_t g_full_avg = avg_u8_round(g, SimpleColors::FULL);
+		uint8_t b_full_avg = avg_u8_round(b, SimpleColors::FULL);
+
+		std::vector<std::vector<uint8_t>> half_full_average = {
+			{r_half_avg, r_full_avg},
+			{g_half_avg, g_full_avg},
+			{b_half_avg, b_full_avg},
+			{SimpleColors::HALF, SimpleColors::FULL}
+		};
+
 		bool r_eq_g = approx_equal(r, g, tolerance);
 		bool r_eq_b = approx_equal(r, b, tolerance);
 		bool g_eq_b = approx_equal(g, b, tolerance);
 
-
 		// Case 1: All three color channels are equal
 		if (r_eq_g && r_eq_b) {
-			data[i] = data[i + 1] = data[i + 2] = ONE_THIRD;
+			if (average) {
+				data[i] = r_one_third_avg;
+				data[i + 1] = g_one_third_avg;
+				data[i + 2] = b_one_third_avg;
+			} else {
+				data[i] = data[i + 1] = data[i + 2] = SimpleColors::ONE_THIRD;
+			}
 			continue;
 		}
 
 		// Case 2: Two color channels are equal and greater than the third
 		if (r_eq_g) {
 			if (r > b + tolerance) {
-				data[i] = data[i + 1] = HALF; data[i + 2] = 0;
+				data[i] = data[i + 1] = SimpleColors::HALF; data[i + 2] = 0;
 			} else {
-				data[i] = data[i + 1] = 0; data[i + 2] = HALF;
+				data[i] = data[i + 1] = 0; data[i + 2] = SimpleColors::HALF;
 			}
 		} else if (r_eq_b) {
 			if (r > g + tolerance) {
-				data[i] = data[i + 2] = HALF; data[i + 1] = 0;
+				data[i] = data[i + 2] = SimpleColors::HALF; data[i + 1] = 0;
 			} else {
-				data[i] = data[i + 2] = 0; data[i + 1] = HALF;
+				data[i] = data[i + 2] = 0; data[i + 1] = SimpleColors::HALF;
 			}
 		} else if (g_eq_b) {
 			if (g > r + tolerance) {
-				data[i + 1] = data[i + 2] = HALF; data[i] = 0;
+				data[i + 1] = data[i + 2] = SimpleColors::HALF; data[i] = 0;
 			} else {
-				data[i + 1] = data[i + 2] = 0; data[i] = HALF;
+				data[i + 1] = data[i + 2] = 0; data[i] = SimpleColors::HALF;
 			}
 		}
 		// Case 3: All three color channels are distinct, in descending order
 		else {
-			if (r > g && g > b) { data[i] = FULL; data[i + 1] = HALF; data[i + 2] = 0; }
-			else if (r > b && b > g) { data[i] = FULL; data[i + 1] = 0; data[i + 2] = HALF; }
-			else if (g > r && r > b) { data[i] = HALF; data[i + 1] = FULL; data[i + 2] = 0; }
-			else if (g > b && b > r) { data[i] = 0; data[i + 1] = FULL; data[i + 2] = HALF; }
-			else if (b > r && r > g) { data[i] = HALF; data[i + 1] = 0; data[i + 2] = FULL; }
-			else if (b > g && g > r) { data[i] = 0; data[i + 1] = HALF; data[i + 2] = FULL; }
+			ChannelIndices indices = get_channel_indices(r, g, b);
+			if (average) {
+				data[i + indices.max] = half_full_average[indices.max][1];
+				data[i + indices.mid] = half_full_average[indices.mid][0];
+				data[i + indices.min] = 0;
+			} else {
+				data[i + indices.max] = SimpleColors::FULL;
+				data[i + indices.mid] = SimpleColors::HALF;
+				data[i + indices.min] = 0;
+			}
 		}
 	}
 	return *this;
@@ -397,7 +382,28 @@ Image& Image::whitenAboveThresholdRegionFraction(int s, int fraction, const std:
 	);
 }
 
+Image& Image::operator=(const Image& img) {
+	if (this == &img) {
+		return *this;  // Protection auto-affectation
+	}
 
+	// Libération de l'ancien buffer
+	if (data != nullptr) {
+		delete[] data;
+	}
+
+	// Copie des nouvelles dimensions
+	w = img.w;
+	h = img.h;
+	channels = img.channels;
+	size = img.size;
+
+	// Allocation et copie du nouveau buffer
+	data = new uint8_t[size];
+	memcpy(data, img.data, size);
+
+	return *this;
+}
 
 Image& Image::std_convolve_clamp_to_0(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc) {
 	uint8_t new_data[w*h];
@@ -545,6 +551,7 @@ void Image::fft(uint32_t n, std::complex<double> x[], std::complex<double>* X) {
 	}
 	//X in bit reversed order
 }
+
 void Image::ifft(uint32_t n, std::complex<double> X[], std::complex<double>* x) {
 	//X in bit reversed order
 	if(X != x) {
@@ -783,6 +790,7 @@ Image& Image::diffmap(Image& img) {
 	}
 	return *this;
 }
+
 Image& Image::diffmap_scale(Image& img, uint8_t scl) {
 	int compare_width = fmin(w,img.w);
 	int compare_height = fmin(h,img.h);
