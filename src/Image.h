@@ -3,6 +3,7 @@
 #include <complex>
 #include <functional>
 #include <vector>
+#include <cstdint>
 
 
 //legacy feature of C
@@ -24,6 +25,18 @@ enum ImageType {
 
 struct Font;
 
+namespace SimpleColors {
+	constexpr uint8_t ONE_THIRD = 85;
+	constexpr uint8_t HALF = 127;
+	constexpr uint8_t FULL = 255;
+}
+
+/*
+std::vector<std::vector<uint8_t>> complexColors = {
+	{191, 255},
+	{63, 0}
+};
+*/
 
 struct Image {
 	uint8_t* data = NULL;
@@ -32,16 +45,33 @@ struct Image {
 	int h;
 	int channels;
 
+	// Structure pour stocker les indices des canaux
+	struct ChannelIndices {
+		int max;
+		int mid;
+		int min;
+	};
+
+	// Fonction helper pour déterminer l'ordre des canaux de couleur
+	ChannelIndices get_channel_indices(uint8_t r, uint8_t g, uint8_t b) {
+		if (r > g && g > b) return {0, 1, 2};
+		if (r > b && b > g) return {0, 2, 1};
+		if (g > r && r > b) return {1, 0, 2};
+		if (g > b && b > r) return {1, 2, 0};
+		if (b > r && r > g) return {2, 0, 1};
+		return {2, 1, 0}; // Cas par défaut
+	}
+
 	Image(const char* filename, int channel_force = 0);
 	Image(int w, int h, int channels = 3);
 	Image(const Image& img);
+	Image& operator=(const Image& img);
 	~Image();
 
 	bool read(const char* filename, int channel_force = 0);
 	bool write(const char* filename);
 
 	ImageType get_file_type(const char* filename);
-
 
 	Image& std_convolve_clamp_to_0(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc);
 	Image& std_convolve_clamp_to_border(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc);
@@ -59,6 +89,12 @@ struct Image {
 		return std::abs(static_cast<int>(a) - static_cast<int>(b)) <= tol;
 	}
 
+	static inline uint8_t avg_u8_round(uint8_t a, uint8_t b) {
+		return static_cast<uint8_t>(
+			(static_cast<unsigned int>(a) +
+			 static_cast<unsigned int>(b) + 1u) / 2u
+		);
+	}
 
 	static uint32_t rev(uint32_t n, uint32_t a);
 	static void bit_rev(uint32_t n, std::complex<double> a[], std::complex<double>* A);
@@ -89,10 +125,12 @@ struct Image {
 
 	Image& applyThresholdTransformationRegionFraction(int threshold, float fraction, std::function<bool(int)> condition, std::function<uint8_t()> transformation);
 
-	Image& darkenBelowThreshold(int s);
-	Image& whitenBelowThreshold(int s);
-	Image& darkenAboveThreshold(int s);
-	Image& whitenAboveThreshold(int s);
+
+	Image& darkenBelowThreshold_ColorNuance(int threshold, int cn);
+	Image& whitenBelowThreshold_ColorNuance(int threshold, int cn);
+	Image& darkenAboveThreshold_ColorNuance(int threshold, int cn);
+	Image& whitenAboveThreshold_ColorNuance(int threshold, int cn);
+
 
 	Image& reverseBelowThreshold(int s);
 	Image& reverseAboveThreshold(int s);
@@ -103,7 +141,7 @@ struct Image {
 	Image& reversed_black_and_white(int s);
 	Image& original_black_and_white(int s);
 
-	Image& simplify_to_dominant_color_combinations(int tolerance);
+	Image& simplify_to_dominant_color_combinations(int tolerance, bool average);
 
 	Image& darkenBelowThresholdRegionFraction(int s, int fraction, const std::vector<int>& rectanglesToModify);
 	Image& whitenBelowThresholdRegionFraction(int s, int fraction, const std::vector<int>& rectanglesToModify);
