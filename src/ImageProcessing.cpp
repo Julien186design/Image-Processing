@@ -4,6 +4,7 @@
 #include <functional>
 #include <string>
 #include <cstring>
+#include <omp.h>
 
 // ============================================================================
 // TYPES ET STRUCTURES
@@ -21,102 +22,7 @@ struct TransformationContext {
     std::string folder120;
 };
 
-// ============================================================================
-// UTILITAIRES
-// ============================================================================
 
-class ImageBuffer {
-private:
-    Image buffer;
-
-public:
-    ImageBuffer(int w, int h, int channels) : buffer(w, h, channels) {}
-
-    void resetFrom(const Image& source) {
-        std::memcpy(buffer.data, source.data, source.size);
-    }
-
-    Image& get() { return buffer; }
-
-    void saveAs(const char* path) {
-        buffer.write(path);
-    }
-};
-
-class OutputPathBuilder {
-public:
-    static std::string buildStandard(
-        const std::string& outputDir,
-        const std::string& baseName,
-        const std::string& transformationType,
-        const std::string& suffix,
-        int threshold
-    ) {
-        return outputDir + baseName + transformationType + suffix + " " + std::to_string(threshold) + ".png";
-    }
-
-    static std::string build120(
-        const std::string& folder120,
-        const std::string& baseName,
-        const std::string& transformationType,
-        const std::string& suffix
-    ) {
-        return folder120 + baseName + transformationType + suffix + " 120.png";
-    }
-};
-
-// ============================================================================
-// WRAPPERS POUR TYPES DE TRANSFORMATIONS
-// ============================================================================
-
-std::vector<GenericTransformationFunc> wrapSimpleTransforms(
-    const std::vector<TransformationFunc>& transforms
-) {
-    std::vector<GenericTransformationFunc> wrapped;
-    wrapped.reserve(transforms.size());
-
-    for (const auto& transform : transforms) {
-        wrapped.emplace_back([transform](Image& img, int t, const std::vector<int>&) {
-            transform(img, t);
-        });
-    }
-
-    return wrapped;
-}
-
-std::vector<GenericTransformationFunc> wrapAlternatingTransforms(
-    const std::vector<AlternatingTransformation>& transforms
-) {
-    std::vector<GenericTransformationFunc> wrapped;
-    wrapped.reserve(transforms.size());
-
-    for (const auto& transform : transforms) {
-        wrapped.emplace_back([transform](Image& img, int, const std::vector<int>& params) {
-            // params[0] = firstThreshold, params[1] = lastThreshold, params[2] = step
-            transform(img, params[0], params[1], params[2]);
-        });
-    }
-
-    return wrapped;
-}
-
-std::vector<GenericTransformationFunc> wrapPartialTransforms(
-    const std::vector<PartialTransformationFunc>& transforms
-) {
-    std::vector<GenericTransformationFunc> wrapped;
-    wrapped.reserve(transforms.size());
-
-    for (const auto& transform : transforms) {
-        wrapped.emplace_back([transform](Image& img, int t, const std::vector<int>& params) {
-            // params[0] = fraction, params[1..n] = rectanglesToModify
-            int fraction = params[0];
-            std::vector<int> rectangles(params.begin() + 1, params.end());
-            transform(img, t, fraction, rectangles);
-        });
-    }
-
-    return wrapped;
-}
 
 // ============================================================================
 // FONCTION GÉNÉRIQUE CENTRALE
@@ -140,6 +46,9 @@ void applyAndSaveGenericTransformations(
 
     for (int currentThreshold = threshold; currentThreshold <= lastThreshold; currentThreshold += step) {
         for (size_t i = 0; i < transforms.size(); ++i) {
+            // LOGGING
+            // printf("  Transformation %zu/%zu: %s\n", i+1, transforms.size(), suffixes[i].c_str());
+
             modified.resetFrom(baseImage);
 
             transforms[i](modified.get(), currentThreshold, additionalParams);
@@ -163,6 +72,55 @@ void applyAndSaveGenericTransformations(
                 modified.saveAs(specialPath.c_str());
             }
         }
+
+    }
+}
+
+void applyTransformationsWithMultipleColorNuances(
+    const Image& baseImage,
+    const std::vector<GenericTransformationFunc>& transforms,
+    const std::vector<std::string>& outputDirs,
+    const std::vector<std::string>& suffixes,
+    const std::string& baseName,
+    const std::string& transformationType,
+    int threshold,
+    int lastThreshold,
+    int step,
+    bool saveAt120,
+    const std::string& folder120,
+    const std::vector<int>& colorNuance
+) {
+    ImageBuffer modified(baseImage.w, baseImage.h, baseImage.channels);
+
+    for (int currentThreshold = threshold; currentThreshold <= lastThreshold; currentThreshold += step) {
+        for (size_t i = 0; i < transforms.size(); ++i) {
+            // LOGGING
+            // printf("  Transformation %zu/%zu: %s\n", i+1, transforms.size(), suffixes[i].c_str());
+
+            modified.resetFrom(baseImage);
+
+            transforms[i](modified.get(), currentThreshold, colorNuance);
+
+            std::string outputPath = OutputPathBuilder::buildStandard(
+                outputDirs[i],
+                baseName,
+                transformationType,
+                suffixes[i],
+                currentThreshold
+            );
+            modified.saveAs(outputPath.c_str());
+
+            if (saveAt120 && currentThreshold == 120) {
+                std::string specialPath = OutputPathBuilder::build120(
+                    folder120,
+                    baseName,
+                    transformationType,
+                    suffixes[i]
+                );
+                modified.saveAs(specialPath.c_str());
+            }
+        }
+
     }
 }
 
@@ -328,6 +286,7 @@ void oneColorTransformations(
     bool average = false;
 
     const std::string oneColorFolder = "Output/One Color/";
+    const std::string diffmapFolder = "Output/Diffmap/";
 
     for (int t = start; t <= end; t += step) {
         for (int i = 0; i < 2; ++i) {
@@ -355,8 +314,47 @@ void oneColorTransformations(
 
     Image diff = image1;
     diff.diffmap(image2);
-    outputPath = "Output/Diffmap/" + baseName + " - Diffmap - Tolerance " + std::to_string(start) + ".png";
+    outputPath = diffmapFolder + baseName + " - Diffmap - Tolerance " + std::to_string(start) + ".png";
     diff.write(outputPath.c_str());
+}
+
+void several_colors_transformations(
+    const Image& baseImage,
+    const std::string& baseName,
+    const std::vector<int>& colorNuances,
+    int threshold,
+    int lastThreshold,
+    int step
+) {
+    ImageBuffer modified(baseImage.w, baseImage.h, baseImage.channels);
+
+    for (int currentThreshold = threshold; currentThreshold <= lastThreshold; currentThreshold += step) {
+        const int threshold3 = 3 * currentThreshold;
+        for (size_t transformIdx = 0; transformIdx < colors_nuances_transformations.size(); ++transformIdx) {
+            for (int colorNuance : colorNuances) {
+
+                modified.resetFrom(baseImage);
+
+                colors_nuances_transformations[transformIdx](modified.get(), threshold3, colorNuance);
+
+                std::string outputPath = OutputPathBuilder::buildStandard(
+                    total_step_by_step_output_dirs[transformIdx],
+                    baseName,
+                    " - ",
+                    total_step_by_step_suffixes[transformIdx],
+                    currentThreshold
+                );
+
+                // Ajouter colorNuance au nom de fichier
+                size_t dotPos = outputPath.rfind(".png");
+                if (dotPos != std::string::npos) {
+                    outputPath.insert(dotPos, " - CN " + std::to_string(colorNuance));
+                }
+
+                modified.saveAs(outputPath.c_str());
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -364,19 +362,29 @@ void oneColorTransformations(
 // ============================================================================
 
 void processImageTransforms(
-    const std::string& inputPath,
-    const std::string& baseName,
+    const std::string& inputFile,
+    const std::string& folderName,
     const std::vector<int>& thresholdsAndStep,
-    int fraction,
+    const std::vector<int>& colorNuances,
+    const int fraction,
     const std::vector<int>& rectanglesToModify,
     const std::vector<int>& tolerance,
-    bool totalStepByStepT,
-    bool totalBlackAndWhiteT,
-    bool totalReversalT,
-    bool partialT,
-    bool alternatingBlackAndWhite,
-    bool oneColor
+    const bool severalColors,
+    const bool totalBlackAndWhiteT,
+    const bool totalReversalT,
+    const bool partialT,
+    const bool alternatingBlackAndWhite,
+    const bool oneColor
 ) {
+
+    // Extract the base name without the extension
+    size_t dotPos = inputFile.find_last_of('.');
+    std::string baseName = inputFile.substr(0, dotPos);
+
+    // Load the image from the input path
+    std::string inputPath = "Input/" + folderName + "/" + inputFile;
+    printf("%s\n", folderName.c_str()); // Print the folder name
+
     const Image image(inputPath.c_str());
 
     const int first_threshold = thresholdsAndStep[0];
@@ -387,13 +395,16 @@ void processImageTransforms(
     if (oneColor) {
         oneColorTransformations(image, baseName, tolerance);
     }
-
+    /*
     // Total Step by Step
-    if (totalStepByStepT) {
+    if (severalColors) {
+        printf("DEBUG: Avant applyAndSaveGenericTransformations\n");  // ← AJOUT
+        printf("DEBUG: transforms.size() = %zu\n", total_step_by_step_transformations.size());  // ← AJOUT
+
         applyAndSaveGenericTransformations(
             image,
             wrapSimpleTransforms(total_step_by_step_transformations),
-            total_step_by_stepoutput_dirs,
+            total_step_by_step_output_dirs,
             total_step_by_step_suffixes,
             baseName,
             " - ",
@@ -402,45 +413,13 @@ void processImageTransforms(
             step,
             true,
             DEFAULT_120_FOLDER,
-            {}
+            {},
+            twoColors
         );
     }
-
-    // Total Reversal
-    if (totalReversalT) {
-        applyAndSaveGenericTransformations(
-            image,
-            wrapSimpleTransforms(total_reversal_step_by_step_transformations),
-            total_step_by_stepoutput_dirs,
-            total_step_by_step_suffixes,
-            baseName,
-            " Reversal - ",
-            first_threshold,
-            last_threshold,
-            step,
-            true,
-            DEFAULT_120_FOLDER,
-            {}
-        );
-    }
-
-    // Alternating Black and White
-    if (alternatingBlackAndWhite) {
-        std::vector<int> altParams = {first_threshold, last_threshold, step};
-        applyAndSaveGenericTransformations(
-            image,
-            wrapAlternatingTransforms(total_alternating_black_and_white_transformations),
-            total_step_by_stepoutput_dirs,
-            total_step_by_step_suffixes,
-            baseName,
-            " Alternating - ",
-            first_threshold,
-            last_threshold,
-            step,
-            true,
-            DEFAULT_120_FOLDER,
-            altParams
-        );
+*/
+    if (severalColors) {
+        several_colors_transformations(image, baseName, colorNuances, first_threshold, last_threshold, step);
     }
 
     // Total Black and White
@@ -458,6 +437,43 @@ void processImageTransforms(
             true,
             DEFAULT_120_FOLDER,
             {}
+        );
+    }
+
+    // Total Reversal
+    if (totalReversalT) {
+        applyAndSaveGenericTransformations(
+            image,
+            wrapSimpleTransforms(total_reversal_step_by_step_transformations),
+            reversal_step_by_step_output_dirs,
+            reversal_step_by_step_suffixes,
+            baseName,
+            " - ",
+            first_threshold,
+            last_threshold,
+            step,
+            true,
+            DEFAULT_120_FOLDER,
+            {}
+        );
+    }
+
+    // Alternating Black and White
+    if (alternatingBlackAndWhite) {
+        std::vector<int> altParams = {first_threshold, last_threshold, step};
+        applyAndSaveGenericTransformations(
+            image,
+            wrapAlternatingTransforms(total_alternating_black_and_white_transformations),
+            total_step_by_step_output_dirs,
+            total_step_by_step_suffixes,
+            baseName,
+            " Alternating - ",
+            first_threshold,
+            last_threshold,
+            step,
+            true,
+            DEFAULT_120_FOLDER,
+            altParams
         );
     }
 
