@@ -4,7 +4,9 @@
 #include <functional>
 #include <string>
 #include <cstring>
-#include <omp.h>
+#include <iostream>
+#include <cmath>
+
 
 // ============================================================================
 // TYPES ET STRUCTURES
@@ -27,6 +29,22 @@ struct TransformationContext {
 // ============================================================================
 // FONCTION GÉNÉRIQUE CENTRALE
 // ============================================================================
+const std::vector<int> genererRectanglesInDiagonale(int fraction) {
+    if (fraction <= 0) return {};
+
+    const int taille = static_cast<int>(std::pow(2.0, fraction));  // 1. Cast explicite
+    const int pas = taille + 1;
+
+    std::cout << fraction << " pas " << pas << " taille " << taille << std::endl;  // 2. std::cout + endl
+
+    std::vector<int> b;
+    b.reserve(static_cast<size_t>(taille));  // 3. Cast pour reserve()
+
+    for (int i = 0; i < taille; ++i) {
+        b.push_back(i * pas);
+    }
+    return b;
+}
 
 void applyAndSaveGenericTransformations(
     const Image& baseImage,
@@ -35,10 +53,10 @@ void applyAndSaveGenericTransformations(
     const std::vector<std::string>& suffixes,
     const std::string& baseName,
     const std::string& transformationType,
-    int threshold,
-    int lastThreshold,
-    int step,
-    bool saveAt120,
+    const int threshold,
+    const int lastThreshold,
+    const int step,
+    const bool saveAt120,
     const std::string& folder120,
     const std::vector<int>& additionalParams
 ) {
@@ -58,11 +76,11 @@ void applyAndSaveGenericTransformations(
                 baseName,
                 transformationType,
                 suffixes[i],
-                currentThreshold
+                currentThreshold / 3
             );
             modified.saveAs(outputPath.c_str());
 
-            if (saveAt120 && currentThreshold == 120) {
+            if (saveAt120 && currentThreshold == 360) {
                 std::string specialPath = OutputPathBuilder::build120(
                     folder120,
                     baseName,
@@ -106,7 +124,7 @@ void applyTransformationsWithMultipleColorNuances(
                 baseName,
                 transformationType,
                 suffixes[i],
-                currentThreshold
+                currentThreshold / 3
             );
             modified.saveAs(outputPath.c_str());
 
@@ -134,10 +152,10 @@ void applyTransformationsWrapper(
     const std::vector<std::string>& outputDirs,
     const std::vector<std::string>& suffixes,
     const std::string& baseName,
-    int threshold,
-    int lastThreshold,
-    int step,
-    bool saveAt120,
+    const int threshold,
+    const int lastThreshold,
+    const int step,
+    const bool saveAt120,
     const std::string& folder120
 ) {
     applyAndSaveGenericTransformations(
@@ -188,10 +206,10 @@ void applyAndSaveReversalTransformations(
     const std::vector<std::string>& outputDirs,
     const std::vector<std::string>& suffixes,
     const std::string& baseName,
-    int threshold,
-    int lastThreshold,
-    int step,
-    bool saveAt120,
+    const int threshold,
+    const int lastThreshold,
+    const int step,
+    const bool saveAt120,
     const std::string& folder120
 ) {
     applyAndSaveGenericTransformations(
@@ -216,9 +234,9 @@ void applyAndSaveAlternatingTransformations(
     const std::vector<std::string>& outputDirs,
     const std::vector<std::string>& suffixes,
     const std::string& baseName,
-    int firstThreshold,
-    int lastThreshold,
-    int step,
+    const int firstThreshold,
+    const int lastThreshold,
+    const int step,
     bool saveAt120,
     const std::string& folder120
 ) {
@@ -246,10 +264,10 @@ void applyAndSavePartialTransformations(
     const std::vector<std::string>& outputDirs,
     const std::vector<std::string>& suffixes,
     const std::string& baseName,
-    int threshold,
-    int lastThreshold,
-    int step,
-    int fraction,
+    const int threshold,
+    const int lastThreshold,
+    const int step,
+    const int fraction,
     const std::vector<int>& rectanglesToModify
 ) {
     std::vector<int> partialParams = {fraction};
@@ -321,36 +339,74 @@ void oneColorTransformations(
 void several_colors_transformations(
     const Image& baseImage,
     const std::string& baseName,
-    const std::vector<int>& colorNuances,
-    int threshold,
-    int lastThreshold,
-    int step
+    const int firstThreshold,
+    const int lastThreshold,
+    const int step,
+    const std::vector<int>& colorNuances
 ) {
     ImageBuffer modified(baseImage.w, baseImage.h, baseImage.channels);
 
-    for (int currentThreshold = threshold; currentThreshold <= lastThreshold; currentThreshold += step) {
-        const int threshold3 = 3 * currentThreshold;
+    for (int currentThreshold = firstThreshold; currentThreshold <= lastThreshold; currentThreshold += step) {
+
         for (size_t transformIdx = 0; transformIdx < colors_nuances_transformations.size(); ++transformIdx) {
-            for (int colorNuance : colorNuances) {
+            for (const int colorNuance : colorNuances) {
 
                 modified.resetFrom(baseImage);
 
-                colors_nuances_transformations[transformIdx](modified.get(), threshold3, colorNuance);
+                colors_nuances_transformations[transformIdx](modified.get(), currentThreshold, colorNuance);
 
                 std::string outputPath = OutputPathBuilder::buildStandard(
                     total_step_by_step_output_dirs[transformIdx],
                     baseName,
                     " - ",
                     total_step_by_step_suffixes[transformIdx],
-                    currentThreshold
+                    currentThreshold / 3
                 );
 
-                // Ajouter colorNuance au nom de fichier
-                size_t dotPos = outputPath.rfind(".png");
-                if (dotPos != std::string::npos) {
-                    outputPath.insert(dotPos, " - CN " + std::to_string(colorNuance));
-                }
+                outputPath += " - CN " + std::to_string(colorNuance) + ".png";
 
+                modified.saveAs(outputPath.c_str());
+            }
+        }
+    }
+}
+
+void several_colors_partial_transformations(
+    const Image& baseImage,
+    const std::vector<GenericTransformationFuncWithColorNuances>& transforms,
+    const std::string& baseName,
+    const int firstThreshold,
+    const int lastThreshold,
+    const int step,
+    const std::vector<int>& colorNuances,
+    const int fraction,
+    const std::vector<int>& rectanglesToModify
+) {
+    ImageBuffer modified(baseImage.w, baseImage.h, baseImage.channels);
+
+    const std::vector<std::string> partialDirs = generatePartialOutputDirs();
+    const std::vector<std::string> partialSuffixes = generatePartialSuffixes();
+
+    for (int currentThreshold = firstThreshold; currentThreshold <= lastThreshold; currentThreshold += step) {
+
+        for (size_t transformIdx = 0; transformIdx < partialTransformationsFunc.size(); ++transformIdx) {
+            for (const int colorNuance : colorNuances) {
+
+                modified.resetFrom(baseImage);
+
+                transforms[transformIdx](modified.get(), currentThreshold,
+                    colorNuance, fraction, rectanglesToModify);
+
+                std::string outputPath = OutputPathBuilder::buildStandard(
+                    partialDirs[transformIdx],
+                    baseName,
+                    " - ",
+                    partialSuffixes[transformIdx],
+                    currentThreshold / 3
+                );
+
+                outputPath += " - Fraction " + std::to_string(fraction) +
+                    " - CN " + std::to_string(colorNuance) + ".png";
                 modified.saveAs(outputPath.c_str());
             }
         }
@@ -360,6 +416,7 @@ void several_colors_transformations(
 // ============================================================================
 // PIPELINE PRINCIPAL
 // ============================================================================
+
 
 void processImageTransforms(
     const std::string& inputFile,
@@ -387,39 +444,17 @@ void processImageTransforms(
 
     const Image image(inputPath.c_str());
 
-    const int first_threshold = thresholdsAndStep[0];
-    const int last_threshold = thresholdsAndStep[1];
-    const int step = thresholdsAndStep[2];
+    const int first_threshold = 3 * thresholdsAndStep[0];
+    const int last_threshold = 3 * thresholdsAndStep[1];
+    const int step = 3 * thresholdsAndStep[2];
 
     // One Color transformation
     if (oneColor) {
         oneColorTransformations(image, baseName, tolerance);
     }
-    /*
-    // Total Step by Step
-    if (severalColors) {
-        printf("DEBUG: Avant applyAndSaveGenericTransformations\n");  // ← AJOUT
-        printf("DEBUG: transforms.size() = %zu\n", total_step_by_step_transformations.size());  // ← AJOUT
 
-        applyAndSaveGenericTransformations(
-            image,
-            wrapSimpleTransforms(total_step_by_step_transformations),
-            total_step_by_step_output_dirs,
-            total_step_by_step_suffixes,
-            baseName,
-            " - ",
-            first_threshold,
-            last_threshold,
-            step,
-            true,
-            DEFAULT_120_FOLDER,
-            {},
-            twoColors
-        );
-    }
-*/
     if (severalColors) {
-        several_colors_transformations(image, baseName, colorNuances, first_threshold, last_threshold, step);
+        several_colors_transformations(image, baseName, first_threshold, last_threshold, step, colorNuances);
     }
 
     // Total Black and White
@@ -479,22 +514,16 @@ void processImageTransforms(
 
     // Partial Transformations
     if (partialT) {
-        std::vector<int> partialParams = {fraction};
-        partialParams.insert(partialParams.end(), rectanglesToModify.begin(), rectanglesToModify.end());
-
-        applyAndSaveGenericTransformations(
+        several_colors_partial_transformations(
             image,
-            wrapPartialTransforms(partialTransformationsFunc),
-            generatePartialOutputDirs(),
-            generatePartialSuffixes(),
+            wrapPartialTransformsWithRectangles(partialTransformationsFunc),
             baseName,
-            " - ",
             first_threshold,
             last_threshold,
             step,
-            false,
-            "",
-            partialParams
+            colorNuances,
+            fraction,
+            rectanglesToModify
         );
     }
 
