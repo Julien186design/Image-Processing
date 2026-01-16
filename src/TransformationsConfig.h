@@ -10,7 +10,8 @@
 using TransformationFunc = std::function<void(Image&, int)>;
 using ReverseTransformationFunc = std::function<void(Image&, int)>;
 using AlternatingTransformation = std::function<void(Image&, int, int, int)>;
-using PartialTransformationFunc = std::function<void(Image&, int, int, const std::vector<int>&)>;
+using PartialTransformationFunc = std::function<void(Image&, int, int, int, const std::vector<int>&)>;
+
 
 using TwoIntTransformation = std::function<void(Image&, int, int)>;
 
@@ -23,6 +24,20 @@ const std::vector<TwoIntTransformation> colors_nuances_transformations = {
     [](Image& img, const int i, const int cn){img.whitenAboveThreshold_ColorNuance(i, cn); }
 };
 
+const std::vector<PartialTransformationFunc> partialTransformationsFunc = {
+    [](Image& img, const int i, const int cn, const int fraction, const std::vector<int>& rectanglesToModify) {
+        img.darkenBelowThresholdRegionFraction(i, cn, fraction, rectanglesToModify);
+    },
+    [](Image& img, const int i, const int cn, const int fraction, const std::vector<int>& rectanglesToModify) {
+        img.whitenBelowThresholdRegionFraction(i, cn, fraction, rectanglesToModify);
+    },
+    [](Image& img, const int i, const int cn, const int fraction, const std::vector<int>& rectanglesToModify) {
+        img.darkenAboveThresholdRegionFraction(i, cn, fraction, rectanglesToModify);
+    },
+    [](Image& img, const int i, const int cn, const int fraction, const std::vector<int>& rectanglesToModify) {
+        img.whitenAboveThresholdRegionFraction(i, cn, fraction, rectanglesToModify);
+    }
+};
 
 const std::vector<ReverseTransformationFunc> total_reversal_step_by_step_transformations = {
     [](Image& img, int i) { img.reverseAboveThreshold(i); },
@@ -39,20 +54,6 @@ const std::vector<TransformationFunc> total_black_and_white_transformations = {
     [](Image& img, int i) { img.reversed_black_and_white(i); }
 };
 
-const std::vector<PartialTransformationFunc> partialTransformationsFunc = {
-    [](Image& img, int i, int fraction, const std::vector<int>& rectanglesToModify) {
-        img.darkenBelowThresholdRegionFraction(i, fraction, rectanglesToModify);
-    },
-    [](Image& img, int i, int fraction, const std::vector<int>& rectanglesToModify) {
-        img.whitenBelowThresholdRegionFraction(i, fraction, rectanglesToModify);
-    },
-    [](Image& img, int i, int fraction, const std::vector<int>& rectanglesToModify) {
-        img.darkenAboveThresholdRegionFraction(i, fraction, rectanglesToModify);
-    },
-    [](Image& img, int i, int fraction, const std::vector<int>& rectanglesToModify) {
-        img.whitenAboveThresholdRegionFraction(i, fraction, rectanglesToModify);
-    }
-};
 
 
 const std::vector<std::string> total_step_by_step_suffixes = {
@@ -78,7 +79,7 @@ inline std::vector<std::string> generatePartialSuffixes() {
     return partialSuffixes;
 }
 
-// Vecteurs de répertoires de sortie
+
 const std::vector<std::string> total_step_by_step_output_dirs = {
     "Output/BTB/", "Output/BTW/", "Output/WTB/", "Output/WTW/"
 };
@@ -91,7 +92,7 @@ const std::vector<std::string> total_black_and_white_output_dirs = {
     "Output/Original black and white/", "Output/Reversed black and white/"
 };
 
-// Fonction pour générer les répertoires de sortie partiels
+
 inline std::vector<std::string> generatePartialOutputDirs() {
     std::vector<std::string> partialOutputDirs;
     std::transform(
