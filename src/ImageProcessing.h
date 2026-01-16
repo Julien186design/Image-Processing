@@ -1,6 +1,5 @@
 #ifndef IMAGE_PROCESSOR_H
 #define IMAGE_PROCESSOR_H
-
 #include "Image.h"
 #include "TransformationsConfig.h"
 
@@ -9,8 +8,11 @@
 #include <sstream>
 #include <functional>
 #include <cstring>
+#include <array>
 
 using GenericTransformationFunc = std::function<void(Image&, int, const std::vector<int>&)>;
+using GenericTransformationFuncWithColorNuances = std::function<void(Image&, int, int, int, const std::vector<int>&)>;
+
 
 class ImageBuffer {
 private:
@@ -52,17 +54,11 @@ public:
         const std::string& baseName,
         const std::string& transformationType,
         const std::string& suffix,
-        int threshold
+        const int threshold
     ) {
         std::ostringstream oss;
         oss << outputDir << baseName << transformationType << suffix
             << " " << threshold;
-        /*
-        if (includeExtra) {
-            oss << " [EXTRA]";
-        }
-        */
-        oss << ".png";
         return oss.str();
     }
 
@@ -84,6 +80,10 @@ public:
         return oss.str();
     }
 };
+
+
+const std::vector<int> genererRectanglesInDiagonale(int fraction);
+
 
 void processImageTransforms(
     const std::string& inputFile,
@@ -114,7 +114,7 @@ inline std::vector<GenericTransformationFunc> wrapSimpleTransforms(
     wrapped.reserve(transforms.size());
 
     for (const auto& transform : transforms) {
-        wrapped.emplace_back([transform](Image& img, int t, const std::vector<int>&) {
+        wrapped.emplace_back([transform](Image& img, const int t, const std::vector<int>&) {
             transform(img, t);
         });
     }
@@ -146,17 +146,32 @@ inline std::vector<GenericTransformationFunc> wrapPartialTransforms(
     wrapped.reserve(transforms.size());
 
     for (const auto& transform : transforms) {
-        wrapped.emplace_back([transform](Image& img, int t, const std::vector<int>& params) {
-            // params[0] = fraction, params[1..n] = rectanglesToModify
-            int fraction = params[0];
-            std::vector<int> rectangles(params.begin() + 1, params.end());
-            transform(img, t, fraction, rectangles);
+        wrapped.emplace_back([transform](Image& img, const int t, const std::vector<int>& params) {
+            const int cn = params[0];
+            const int fraction = params[1];
+            const std::vector<int> rectangles(params.begin() + 2, params.end());
+            transform(img, t, cn, fraction, rectangles);
         });
     }
 
     return wrapped;
 }
 
+inline std::vector<GenericTransformationFuncWithColorNuances> wrapPartialTransformsWithRectangles(
+    const std::vector<PartialTransformationFunc>& transforms
+) {
+    std::vector<GenericTransformationFuncWithColorNuances> wrapped;
+    wrapped.reserve(transforms.size());
+
+    for (const auto& transform : transforms) {
+        wrapped.emplace_back([transform](Image& img, const int i, const int cn, const int fraction,
+                const std::vector<int>& rectanglesToModify) {
+            transform(img, i, cn, fraction, rectanglesToModify);
+        });
+    }
+
+    return wrapped;
+}
 
 
 inline std::vector<GenericTransformationFunc>
