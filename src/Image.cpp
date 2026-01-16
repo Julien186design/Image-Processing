@@ -138,11 +138,10 @@ Image& Image::whitenAboveThreshold_ColorNuance(const int threshold, const int cn
 }
 
 
-Image& Image::reverseAboveThreshold(int s) {
-	const int threshold3 = 3 * s;
+Image& Image::reverseAboveThreshold(const int threshold) {
 	for(size_t i = 0; i < size; i += channels) {
 		int rgb = (data[i] + data[i + 1] + data[i + 2]);
-		if (rgb < threshold3) {
+		if (rgb < threshold) {
 			data[i] = 255 - data[i];
 			data[i + 1] = 255 - data[i + 1];
 			data[i + 2] = 255 - data[i + 2];
@@ -151,11 +150,10 @@ Image& Image::reverseAboveThreshold(int s) {
 	return *this;
 }
 
-Image& Image::reverseBelowThreshold(int s) {
-	const int threshold3 = 3 * s;
+Image& Image::reverseBelowThreshold(const int threshold) {
 	for(size_t i = 0; i < size; i+=channels) {
 		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb > threshold3) {
+		if (rgb > threshold) {
 			data[i] = 255 - data[i];
 			data[i + 1] = 255 - data[i + 1];
 			data[i + 2] = 255 - data[i + 2];
@@ -164,11 +162,10 @@ Image& Image::reverseBelowThreshold(int s) {
 	return *this;
 }
 
-Image& Image::original_black_and_white(int s) {
-	const int threshold3 = 3 * s;
+Image& Image::original_black_and_white(const int threshold) {
 	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
 		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb > threshold3) {
+		if (rgb > threshold) {
 			data[i] = data[i + 1] = data[i + 2] = 255;
 		} else {
 			data[i] = data[i + 1] = data[i + 2] = 0;
@@ -177,6 +174,19 @@ Image& Image::original_black_and_white(int s) {
 	return *this;
 }
 
+Image& Image::reversed_black_and_white(const int threshold) {
+	for (size_t i = 0; i < size; i += channels) {
+
+		int rgb = data[i] + data[i + 1] + data[i + 2];
+
+		uint8_t value = (rgb < threshold) ? 255 : 0;
+
+		data[i] = data[i + 1] = data[i + 2] = value;
+	}
+	return *this;
+}
+
+// in construction
 Image& Image::alternatelyDarkenAndWhitenBelowTheThreshold(int s, int first_threshold,	int last_threshold) {
 	const int threshold3 = 3 * s;
 	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
@@ -198,20 +208,6 @@ Image& Image::alternatelyDarkenAndWhitenAboveTheThreshold(int s, int first_thres
 	}
 	return *this;
 }
-
-Image& Image::reversed_black_and_white(int s) {
-	const int threshold3 = 3 * s;
-	for (size_t i = 0; i < size; i += channels) {
-
-		int rgb = data[i] + data[i + 1] + data[i + 2];
-
-		uint8_t value = (rgb < threshold3) ? 255 : 0;
-
-		data[i] = data[i + 1] = data[i + 2] = value;
-	}
-	return *this;
-}
-
 
 
 Image& Image::simplify_to_dominant_color_combinations(int tolerance, bool average) {
@@ -296,45 +292,40 @@ Image& Image::simplify_to_dominant_color_combinations(int tolerance, bool averag
 
 //fraction by rectangles
 
+template<typename ConditionFunc, typename TransformFunc>
 Image& Image::applyThresholdTransformationRegionFraction(
 	int threshold,
 	int fraction,
 	const std::vector<int>& rectanglesToModify,
-	std::function<bool(int)> condition,
-	std::function<uint8_t()> transformation
+	ConditionFunc condition,
+	TransformFunc transformation
 ) {
-	int numRectanglesPerRow = fraction * 2;  // Nombre de rectangles par ligne
-	int numRectanglesPerCol = fraction * 2;  // Nombre de rectangles par colonne
-	int totalRectangles = numRectanglesPerRow * numRectanglesPerCol;
+	if (rectanglesToModify.empty()) return *this;
 
-	int rectWidth = w / numRectanglesPerRow;  // Largeur de chaque rectangle
-	int rectHeight = h / numRectanglesPerCol; // Hauteur de chaque rectangle
+	const int numRectanglesPerRow = 1 << fraction;
+	const int totalRectangles = numRectanglesPerRow * numRectanglesPerRow;
+	const int rectWidth = w / numRectanglesPerRow;
+	const int rectHeight = h / numRectanglesPerRow;
+	const uint8_t transformValue = transformation();
 
 	for (int rectIndex : rectanglesToModify) {
-		if (rectIndex < 0 || rectIndex >= totalRectangles) {
-			continue; // Ignorer les indices invalides
-		}
+		if (rectIndex < 0 || rectIndex >= totalRectangles) continue;
 
-		int rectRow = rectIndex / numRectanglesPerRow;
-		int rectCol = rectIndex % numRectanglesPerRow;
-
-		int startX = rectCol * rectWidth;
-		int startY = rectRow * rectHeight;
-		int endX = (rectCol + 1) * rectWidth;
-		int endY = (rectRow + 1) * rectHeight;
-
-		// Assurez-vous de ne pas dépasser les limites de l'image
-		endX = std::min(endX, w);
-		endY = std::min(endY, h);
+		const int rectRow = rectIndex / numRectanglesPerRow;
+		const int rectCol = rectIndex % numRectanglesPerRow;
+		const int startX = rectCol * rectWidth;
+		const int startY = rectRow * rectHeight;
+		const int endX = std::min((rectCol + 1) * rectWidth, w);
+		const int endY = std::min((rectRow + 1) * rectHeight, h);
 
 		for (int y = startY; y < endY; ++y) {
+			const size_t rowOffset = y * w * channels;
 			for (int x = startX; x < endX; ++x) {
-				size_t i = (y * w + x) * channels;
-				int rgb = (data[i] + data[i + 1] + data[i + 2]);
+				const size_t i = rowOffset + x * channels;
+				const int rgb = data[i] + data[i + 1] + data[i + 2];
 
 				if (condition(rgb)) {
-					uint8_t value = transformation();
-					data[i] = data[i + 1] = data[i + 2] = value;
+					data[i] = data[i + 1] = data[i + 2] = transformValue;
 				}
 			}
 		}
@@ -342,45 +333,69 @@ Image& Image::applyThresholdTransformationRegionFraction(
 	return *this;
 }
 
-Image& Image::darkenBelowThresholdRegionFraction(int s, int fraction, const std::vector<int>& rectanglesToModify) {
+Image& Image::darkenBelowThresholdRegionFraction(
+	int threshold,
+	int cn,
+	const int fraction,
+	const std::vector<int>& rectanglesToModify) {
+
 	return applyThresholdTransformationRegionFraction(
-		3 * s,
-		fraction,
-		rectanglesToModify,
-		[s](int rgb) { return rgb < 3 * s; },
-		[]() { return 0; }
+	   threshold,
+	   fraction,
+	   rectanglesToModify,
+	   [threshold](int rgb) { return rgb < threshold; },
+	   [cn]() -> uint8_t { return cn; }
 	);
 }
 
-Image& Image::whitenBelowThresholdRegionFraction(int s, int fraction, const std::vector<int>& rectanglesToModify) {
+Image& Image::whitenBelowThresholdRegionFraction(
+	int threshold,
+	const int cn,
+	const int fraction,
+	const std::vector<int>& rectanglesToModify) {
+
+	const int newColor = 255 - cn;
+
+		return applyThresholdTransformationRegionFraction(
+		   threshold,
+		   fraction,
+		   rectanglesToModify,
+		   [threshold](int rgb) { return rgb < threshold; },
+		   [newColor]() -> uint8_t { return newColor; }
+		);
+	}
+
+Image& Image::darkenAboveThresholdRegionFraction(
+	int threshold,
+	int cn,
+	int fraction,
+	const std::vector<int>& rectanglesToModify) {
+
 	return applyThresholdTransformationRegionFraction(
-		3 * s,
-		fraction,
-		rectanglesToModify,
-		[s](int rgb) { return rgb < 3 * s; },
-		[]() { return 255; }
+	   threshold,
+	   fraction,
+	   rectanglesToModify,
+	   [threshold](int rgb) { return rgb > threshold; },
+	   [cn]() -> uint8_t { return cn; }
 	);
 }
 
-Image& Image::darkenAboveThresholdRegionFraction(int s, int fraction, const std::vector<int>& rectanglesToModify) {
-	return applyThresholdTransformationRegionFraction(
-		3 * s,
-		fraction,
-		rectanglesToModify,
-		[s](int rgb) { return rgb > 3 * s; },
-		[]() { return 0; }
-	);
-}
+Image& Image::whitenAboveThresholdRegionFraction(
+	int threshold,
+	int cn,
+	int fraction,
+	const std::vector<int>& rectanglesToModify) {
 
-Image& Image::whitenAboveThresholdRegionFraction(int s, int fraction, const std::vector<int>& rectanglesToModify) {
-	return applyThresholdTransformationRegionFraction(
-		3 * s,
-		fraction,
-		rectanglesToModify,
-		[s](int rgb) { return rgb > 3 * s; },
-		[]() { return 255; }
-	);
-}
+	const int newColor = 255 - cn;
+
+		return applyThresholdTransformationRegionFraction(
+		   threshold,
+		   fraction,
+		   rectanglesToModify,
+		   [threshold](int rgb) { return rgb > threshold; },
+		   [newColor]() -> uint8_t { return newColor; }
+		);
+	}
 
 Image& Image::operator=(const Image& img) {
 	if (this == &img) {
