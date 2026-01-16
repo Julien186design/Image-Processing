@@ -77,13 +77,6 @@ struct Image {
 	Image& std_convolve_clamp_to_border(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc);
 	Image& std_convolve_cyclic(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc);
 
-	Image& applyThresholdTransformationRegionFraction(
-		int threshold,
-		int fraction,
-		const std::vector<int>& rectanglesToModify,
-		std::function<bool(int)> condition,
-		std::function<uint8_t()> transformation
-	);
 
 	static inline bool approx_equal(uint8_t a, uint8_t b, uint8_t tol) {
 		return std::abs(static_cast<int>(a) - static_cast<int>(b)) <= tol;
@@ -123,7 +116,6 @@ struct Image {
 
 	Image& grayscale_avg();
 
-	Image& applyThresholdTransformationRegionFraction(int threshold, float fraction, std::function<bool(int)> condition, std::function<uint8_t()> transformation);
 
 
 	Image& darkenBelowThreshold_ColorNuance(int threshold, int cn);
@@ -132,21 +124,30 @@ struct Image {
 	Image& whitenAboveThreshold_ColorNuance(int threshold, int cn);
 
 
-	Image& reverseBelowThreshold(int s);
-	Image& reverseAboveThreshold(int s);
+	Image& reverseBelowThreshold(int threshold);
+	Image& reverseAboveThreshold(int threshold);
 
 	Image& alternatelyDarkenAndWhitenBelowTheThreshold(int s, int first_threshold,	int last_threshold);
 	Image& alternatelyDarkenAndWhitenAboveTheThreshold(int s, int first_threshold,	int last_threshold);
 
-	Image& reversed_black_and_white(int s);
-	Image& original_black_and_white(int s);
+	Image& original_black_and_white(int threshold);
+	Image& reversed_black_and_white(int threshold);
 
 	Image& simplify_to_dominant_color_combinations(int tolerance, bool average);
 
-	Image& darkenBelowThresholdRegionFraction(int s, int fraction, const std::vector<int>& rectanglesToModify);
-	Image& whitenBelowThresholdRegionFraction(int s, int fraction, const std::vector<int>& rectanglesToModify);
-	Image& darkenAboveThresholdRegionFraction(int s, int fraction, const std::vector<int>& rectanglesToModify);
-	Image& whitenAboveThresholdRegionFraction(int s, int fraction, const std::vector<int>& rectanglesToModify);
+	template<typename ConditionFunc, typename TransformFunc>
+	Image& applyThresholdTransformationRegionFraction(
+		int threshold,
+		int fraction,
+		const std::vector<int>& rectanglesToModify,
+		ConditionFunc condition,
+		TransformFunc transformation
+	);
+
+	Image& darkenBelowThresholdRegionFraction(int threshold, int cn, int fraction, const std::vector<int>& rectanglesToModify);
+	Image& whitenBelowThresholdRegionFraction(int threshold, int cn, int fraction, const std::vector<int>& rectanglesToModify);
+	Image& darkenAboveThresholdRegionFraction(int threshold, int cn, int fraction, const std::vector<int>& rectanglesToModify);
+	Image& whitenAboveThresholdRegionFraction(int threshold, int cn, int fraction, const std::vector<int>& rectanglesToModify);
 
 
 	Image& grayscale_lum();
