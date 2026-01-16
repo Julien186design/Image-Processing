@@ -12,3 +12,6 @@ find . -type f -exec du -h {} + | sort --human-numeric-sort --reverse | head -n 
 
 Renaming all files whose name begin by "ABC-" to delete the first 4 characters. ("ABC-" is for the example)
 for f in "ABC-"*; do   mv "$f" "${f#ABC-}"; done
+
+Compress A PNG image
+pngcrush -ow image.png
