@@ -210,42 +210,36 @@ Image& Image::alternatelyDarkenAndWhitenAboveTheThreshold(int s, int first_thres
 }
 
 
-Image& Image::simplify_to_dominant_color_combinations(int tolerance, bool average) {
+Image& Image::simplify_to_dominant_color_combinations(const int tolerance, const bool average) {
 
 	for (size_t i = 0; i < size; i += channels) {
 		uint8_t r = data[i];
 		uint8_t g = data[i + 1];
 		uint8_t b = data[i + 2];
 
-		uint8_t r_one_third_avg = avg_u8_round(r, SimpleColors::ONE_THIRD);
-		uint8_t g_one_third_avg = avg_u8_round(g, SimpleColors::ONE_THIRD);
-		uint8_t b_one_third_avg = avg_u8_round(b, SimpleColors::ONE_THIRD);
+		const uint8_t r_third = avg_u8_round(r, SimpleColors::ONE_THIRD);
+		const uint8_t g_third = avg_u8_round(g, SimpleColors::ONE_THIRD);
+		const uint8_t b_third = avg_u8_round(b, SimpleColors::ONE_THIRD);
 		
-		uint8_t r_half_avg = avg_u8_round(r, SimpleColors::HALF);
-		uint8_t g_half_avg = avg_u8_round(g, SimpleColors::HALF);
-		uint8_t b_half_avg = avg_u8_round(b, SimpleColors::HALF);
+		const uint8_t r_half = avg_u8_round(r, SimpleColors::HALF);
+		const uint8_t g_half = avg_u8_round(g, SimpleColors::HALF);
+		const uint8_t b_half = avg_u8_round(b, SimpleColors::HALF);
 
-		uint8_t r_full_avg = avg_u8_round(r, SimpleColors::FULL);
-		uint8_t g_full_avg = avg_u8_round(g, SimpleColors::FULL);
-		uint8_t b_full_avg = avg_u8_round(b, SimpleColors::FULL);
+		const uint8_t r_full = avg_u8_round(r, SimpleColors::FULL);
+		const uint8_t g_full = avg_u8_round(g, SimpleColors::FULL);
+		const uint8_t b_full = avg_u8_round(b, SimpleColors::FULL);
 
-		std::vector<std::vector<uint8_t>> half_full_average = {
-			{r_half_avg, r_full_avg},
-			{g_half_avg, g_full_avg},
-			{b_half_avg, b_full_avg},
-			{SimpleColors::HALF, SimpleColors::FULL}
-		};
 
-		bool r_eq_g = approx_equal(r, g, tolerance);
-		bool r_eq_b = approx_equal(r, b, tolerance);
-		bool g_eq_b = approx_equal(g, b, tolerance);
+		const bool r_eq_g = approx_equal(r, g, tolerance);
+		const bool r_eq_b = approx_equal(r, b, tolerance);
+		const bool g_eq_b = approx_equal(g, b, tolerance);
 
 		// Case 1: All three color channels are equal
-		if (r_eq_g && r_eq_b) {
+		if (r_eq_g && r_eq_b && g_eq_b) {
 			if (average) {
-				data[i] = r_one_third_avg;
-				data[i + 1] = g_one_third_avg;
-				data[i + 2] = b_one_third_avg;
+				data[i]     = r_third;
+				data[i + 1] = g_third;
+				data[i + 2] = b_third;
 			} else {
 				data[i] = data[i + 1] = data[i + 2] = SimpleColors::ONE_THIRD;
 			}
@@ -254,30 +248,42 @@ Image& Image::simplify_to_dominant_color_combinations(int tolerance, bool averag
 
 		// Case 2: Two color channels are equal and greater than the third
 		if (r_eq_g) {
-			if (r > b + tolerance) {
-				data[i] = data[i + 1] = SimpleColors::HALF; data[i + 2] = 0;
+			if (average) {
+				data[i]     = r_half;
+				data[i + 1] = g_half;
+				data[i + 2] = 0;
 			} else {
-				data[i] = data[i + 1] = 0; data[i + 2] = SimpleColors::HALF;
+				data[i] = data[i + 1] = SimpleColors::HALF;
+				data[i + 2] = 0;
 			}
 		} else if (r_eq_b) {
-			if (r > g + tolerance) {
-				data[i] = data[i + 2] = SimpleColors::HALF; data[i + 1] = 0;
+			if (average) {
+				data[i]     = r_half;
+				data[i + 1] = 0;
+				data[i + 2] = b_half;
 			} else {
-				data[i] = data[i + 2] = 0; data[i + 1] = SimpleColors::HALF;
+				data[i] = data[i + 2] = SimpleColors::HALF;
+				data[i + 1] = 0;
 			}
 		} else if (g_eq_b) {
-			if (g > r + tolerance) {
-				data[i + 1] = data[i + 2] = SimpleColors::HALF; data[i] = 0;
+			if (average) {
+				data[i]     = 0;
+				data[i + 1] = g_half;
+				data[i + 2] = b_half;
 			} else {
-				data[i + 1] = data[i + 2] = 0; data[i] = SimpleColors::HALF;
+				data[i] = 0;
+				data[i + 1] = data[i + 2] = SimpleColors::HALF;
 			}
 		}
 		// Case 3: All three color channels are distinct, in descending order
 		else {
-			ChannelIndices indices = get_channel_indices(r, g, b);
+			const ChannelIndices indices = get_channel_indices(r, g, b);
 			if (average) {
-				data[i + indices.max] = half_full_average[indices.max][1];
-				data[i + indices.mid] = half_full_average[indices.mid][0];
+				const uint8_t avgs_full[] = {r_full, g_full, b_full};
+				const uint8_t avgs_half[] = {r_half, g_half, b_half};
+
+				data[i + indices.max] = avgs_full[indices.max];
+				data[i + indices.mid] = avgs_half[indices.mid];
 				data[i + indices.min] = 0;
 			} else {
 				data[i + indices.max] = SimpleColors::FULL;
