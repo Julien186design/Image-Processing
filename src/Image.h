@@ -1,9 +1,7 @@
 #include <stdint.h>
 #include <cstdio>
 #include <complex>
-#include <functional>
 #include <vector>
-#include <cstdint>
 
 
 //legacy feature of C
@@ -31,15 +29,9 @@ namespace SimpleColors {
 	constexpr uint8_t FULL = 255;
 }
 
-/*
-std::vector<std::vector<uint8_t>> complexColors = {
-	{191, 255},
-	{63, 0}
-};
-*/
 
 struct Image {
-	uint8_t* data = NULL;
+	uint8_t* data = nullptr;
 	size_t size = 0;
 	int w;
 	int h;
@@ -53,7 +45,7 @@ struct Image {
 	};
 
 	// Fonction helper pour déterminer l'ordre des canaux de couleur
-	ChannelIndices get_channel_indices(uint8_t r, uint8_t g, uint8_t b) {
+	static ChannelIndices get_channel_indices(const uint8_t r, const  uint8_t g, const uint8_t b) {
 		if (r > g && g > b) return {0, 1, 2};
 		if (r > b && b > g) return {0, 2, 1};
 		if (g > r && r > b) return {1, 0, 2};
@@ -71,18 +63,21 @@ struct Image {
 	bool read(const char* filename, int channel_force = 0);
 	bool write(const char* filename);
 
-	ImageType get_file_type(const char* filename);
-
+	static ImageType get_file_type(const char* filename);
+	/*
 	Image& std_convolve_clamp_to_0(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc);
+	*/
+	Image& std_convolve_clamp_to_0(int channel, int ker_w, int ker_h, const double *ker, int cr, int c);
 	Image& std_convolve_clamp_to_border(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc);
 	Image& std_convolve_cyclic(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc);
 
 
-	static inline bool approx_equal(uint8_t a, uint8_t b, uint8_t tol) {
-		return std::abs(static_cast<int>(a) - static_cast<int>(b)) <= tol;
+	static bool approx_equal(uint8_t a, uint8_t b, uint8_t tol) {
+		const int diff = static_cast<int>(a) - static_cast<int>(b);
+		return diff >= 0 ? diff <= tol : -diff <= tol;
 	}
 
-	static inline uint8_t avg_u8_round(uint8_t a, uint8_t b) {
+	static uint8_t avg_u8_round(uint8_t a, uint8_t b) {
 		return static_cast<uint8_t>(
 			(static_cast<unsigned int>(a) +
 			 static_cast<unsigned int>(b) + 1u) / 2u
@@ -110,18 +105,22 @@ struct Image {
 	Image& convolve_cyclic(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc);
 
 
-	Image& diffmap(Image& img);
+	Image& diffmap(const Image& img);
 	Image& diffmap_scale(Image& img, uint8_t scl = 0);
 
 
 	Image& grayscale_avg();
 
 
-
 	Image& darkenBelowThreshold_ColorNuance(int threshold, int cn);
 	Image& whitenBelowThreshold_ColorNuance(int threshold, int cn);
 	Image& darkenAboveThreshold_ColorNuance(int threshold, int cn);
 	Image& whitenAboveThreshold_ColorNuance(int threshold, int cn);
+
+	Image& darkenBelowThreshold_ColorNuance_AVX2(int threshold, uint8_t cn);
+	Image& whitenBelowThreshold_ColorNuance_AVX2(int threshold, uint8_t cn);
+	Image& darkenAboveThreshold_ColorNuance_AVX2(int threshold, uint8_t cn);
+	Image& whitenAboveThreshold_ColorNuance_AVX2(int threshold, uint8_t cn);
 
 
 	Image& reverseBelowThreshold(int threshold);
@@ -144,10 +143,14 @@ struct Image {
 		TransformFunc transformation
 	);
 
-	Image& darkenBelowThresholdRegionFraction(int threshold, int cn, int fraction, const std::vector<int>& rectanglesToModify);
-	Image& whitenBelowThresholdRegionFraction(int threshold, int cn, int fraction, const std::vector<int>& rectanglesToModify);
-	Image& darkenAboveThresholdRegionFraction(int threshold, int cn, int fraction, const std::vector<int>& rectanglesToModify);
-	Image& whitenAboveThresholdRegionFraction(int threshold, int cn, int fraction, const std::vector<int>& rectanglesToModify);
+	Image& darkenBelowThresholdRegionFraction(int threshold, int cn, int fraction,
+		const std::vector<int>& rectanglesToModify);
+	Image& whitenBelowThresholdRegionFraction(int threshold, int cn, int fraction,
+		const std::vector<int>& rectanglesToModify);
+	Image& darkenAboveThresholdRegionFraction(int threshold, int cn, int fraction,
+		const std::vector<int>& rectanglesToModify);
+	Image& whitenAboveThresholdRegionFraction(int threshold, int cn, int fraction,
+		const std::vector<int>& rectanglesToModify);
 
 
 	Image& grayscale_lum();
@@ -176,7 +179,7 @@ struct Image {
 
 
 struct Font {
-	SFT sft = {NULL, 12, 12, 0, 0, SFT_DOWNWARD_Y|SFT_RENDER_IMAGE};
+	SFT sft = {nullptr, 12, 12, 0, 0, SFT_DOWNWARD_Y|SFT_RENDER_IMAGE};
 	Font(const char* fontfile, uint16_t size) {
 		if((sft.font = sft_loadfile(fontfile)) == NULL) {
 			printf("\e[31m[ERROR] Failed to load %s\e[0m\n", fontfile);
