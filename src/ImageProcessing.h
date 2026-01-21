@@ -9,6 +9,8 @@
 #include <functional>
 #include <cstring>
 #include <array>
+#include <algorithm> // for std::min et std::max
+#include <iostream>
 
 using GenericTransformationFunc = std::function<void(Image&, int, const std::vector<int>&)>;
 using GenericTransformationFuncWithColorNuances = std::function<void(Image&, int, int, int, const std::vector<int>&)>;
@@ -25,13 +27,12 @@ private:
     };
 
 public:
-    ImageBuffer(int w, int h, int channels) : buffer(w, h, channels) {}
+    ImageBuffer(const int w, const int h, const int channels) : buffer(w, h, channels) {}
 
     void resetFrom(const Image& source) {
         assert(buffer.size == source.size);
         std::memcpy(buffer.data, source.data, buffer.size);
     }
-
 
 
     Image& get() { return buffer; }
@@ -71,35 +72,42 @@ public:
         std::ostringstream oss;
         oss << folder120 << baseName << transformationType << suffix
             << " 120";
-        /*
-        if (includeExtra) {
-            oss << " [EXTRA]";
-        }
-        */
         oss << ".png";
         return oss.str();
     }
 };
 
 
-const std::vector<int> genererRectanglesInDiagonale(int fraction);
+inline std::vector<int> genererRectanglesInDiagonal(const int fraction) {
+    if (fraction <= 0) return {};
+    const int taille = 1 << fraction;  // 2^fraction via bit-shift
+    const int pas = taille + 1;
+
+    std::vector<int> vector;
+    vector.reserve(taille);
+
+    vector.push_back(-1);
+    for (int i = 0; i < taille; ++i) {
+        vector.push_back(i * pas);
+    }
+    return vector;
+}
 
 
-void processImageTransforms(
-    const std::string& inputFile,
-    const std::string& folderName,
-    const std::vector<int>& thresholdsAndStep,
-    const std::vector<int>& colorNuances,
-    int fraction,
-    const std::vector<int>& rectanglesToModify,
-    const std::vector<int>&  tolerance,
-    bool severalColors,
-    bool totalBlackAndWhiteT,
-    bool totalReversalT,
-    bool partialT,
-    bool alternatingBlackAndWhite,
-    bool oneColor
-);
+inline std::vector<int> range_to_vector(const std::vector<int>& input) {
+    if (input.size() != 2) {
+        return {}; // Retourne un vecteur vide si l'entrée n'a pas 2 éléments
+    }
+
+    const int start = std::min(input[0], input[1]);
+    const int end = std::max(input[0], input[1]);
+
+    std::vector<int> vector;
+    for (int i = start; i <= end; ++i) {
+        vector.push_back(i);
+    }
+    return vector;
+}
 
 
 
@@ -191,5 +199,21 @@ wrapTwoIntTransforms(const std::vector<TwoIntTransformation>& transforms) {
     return wrapped;
 }
 
+void processImageTransforms(
+    const std::string& inputFile,
+    const std::string& folderName,
+    const std::vector<int>& thresholdsAndStep,
+    const std::vector<int>& colorNuances,
+    int fraction,
+    std::vector<int>& rectanglesToModify,
+    const std::vector<int>&  tolerance,
+    bool severalColors,
+    bool totalBlackAndWhite,
+    bool totalReversal,
+    bool partial,
+    bool partialInDiagonal,
+    bool alternatingBlackAndWhite,
+    bool oneColor
+);
 
 #endif
