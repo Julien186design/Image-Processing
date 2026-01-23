@@ -4,8 +4,8 @@ find . -type f -delete
 Getting all unique filenames in the "One Color" folder by cutting after "- Tolerance". Delete "Output/One Color" to run in the current folder.
 find "Output/One Color" -type f   -printf '%f\n' | sed 's/ - Tolerance.*//' | sort -u
 
-Getting all unique filenames whose name contains "Or".
-find -type f -name "*Or*" -printf '%f\n' | sed 's/ - .*//' | sort -u
+Getting all unique filenames whose name contains "CN 40" | display names truncated from "TB".
+find -type f -name "*CN 40*" -printf '%f\n' | sed 's/TB.*//' | sort -u
 
 Getting the names of the 20 largest files (useful to launch in the "Output" folder if processing time is getting important).
 find . -type f -exec du -h {} + | sort --human-numeric-sort --reverse | head -n 20
