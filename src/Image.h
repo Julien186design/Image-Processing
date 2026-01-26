@@ -11,6 +11,7 @@
 #undef __STRICT_ANSI__
 #define _USE_MATH_DEFINES
 #include <cmath>
+#include <iostream>
 #ifndef M_PI
 	#define M_PI (3.14159265358979323846)
 #endif
@@ -210,11 +211,16 @@ struct Font {
 };
 
 inline ImageInfo extractImageInfo(const std::string& inputFile) {
-	const size_t dotPos = inputFile.find_last_of('.');
+
+	const size_t dotPos   = inputFile.find_last_of('.');
 	const size_t slashPos = inputFile.find_last_of('/');
+
 	const std::string folderName = inputFile.substr(0, slashPos);
-	const std::string baseName = inputFile.substr(slashPos + 1, dotPos);
-	const std::string inputPath = "Input/" + folderName + "/" + baseName;
+
+	const std::string baseName =
+	inputFile.substr(slashPos + 1, dotPos - (slashPos + 1));
+
+	const std::string inputPath = "Input/" + inputFile;
 
 	return {baseName, inputPath};
 }
