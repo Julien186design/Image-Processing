@@ -14,21 +14,37 @@ To run the code, you need to create two folders: "Input" and "Output".
 "Output" must contain the following subfolders:
 
 "120"
+
 "BTB"
+
 "BTB Square"
+
 "BTW"
+
 "BTW Square"
+
 "Diffmap"
+
 "Edge Detector"
+
 "One Color"
+
 "Original black and white"
+
 "Reversal-BT"
+
 "Reversal-WT"
+
 "Reversed black and white"
+
 "Videos"
+
 "WTB"
+
 "WTB Square"
+
 "WTW"
+
 "WTW Square"
 
 
