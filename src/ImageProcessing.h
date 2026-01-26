@@ -8,7 +8,6 @@
 #include <sstream>
 #include <functional>
 #include <cstring>
-#include <array>
 #include <algorithm> // for std::min et std::max
 #include <iostream>
 
@@ -70,9 +69,7 @@ public:
         const std::string& suffix
     ) {
         std::ostringstream oss;
-        oss << folder120 << baseName << transformationType << suffix
-            << " 120";
-        oss << ".png";
+        oss << folder120 << baseName << transformationType << suffix;
         return oss.str();
     }
 };
@@ -183,14 +180,14 @@ inline std::vector<GenericTransformationFuncWithColorNuances> wrapPartialTransfo
 
 
 inline std::vector<GenericTransformationFunc>
-wrapTwoIntTransforms(const std::vector<TwoIntTransformation>& transforms) {
+wrapTwoIntTransforms(const std::vector<TwoIntTransformationByThreshold>& transforms) {
 
     std::vector<GenericTransformationFunc> wrapped;
     wrapped.reserve(transforms.size());
 
     for (const auto& t : transforms) {
         wrapped.emplace_back(
-            [t](Image& img, int threshold, const std::vector<int>& params) {
+            [t](Image& img, const int threshold, const std::vector<int>& params) {
                 // params[0] = colorNuance
                 t(img, threshold, params[0]);
             }
@@ -200,14 +197,16 @@ wrapTwoIntTransforms(const std::vector<TwoIntTransformation>& transforms) {
 }
 
 void processImageTransforms(
-    const std::string& inputFile,
-    const std::string& folderName,
+    const std::string& baseName ,
+    const std::string& inputPath,
     const std::vector<int>& thresholdsAndStep,
+    const std::vector<float> &proportions,
     const std::vector<int>& colorNuances,
     int fraction,
     std::vector<int>& rectanglesToModify,
     const std::vector<int>&  tolerance,
-    bool severalColors,
+    bool severalColorsByThreshold,
+    bool severalColorsByProportion,
     bool totalBlackAndWhite,
     bool totalReversal,
     bool partial,
