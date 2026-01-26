@@ -13,24 +13,23 @@ To run the code, you need to create two folders: "Input" and "Output".
 
 "Output" must contain the following subfolders:
 
-.
-├── 120
-├── BTB
-├── BTB Square
-├── BTW
-├── BTW Square
-├── Diffmap
-├── Edge Detector
-├── One Color
-├── Original black and white
-├── Reversal-BT
-├── Reversal-WT
-├── Reversed black and white
-├── Videos
-├── WTB
-├── WTB Square
-├── WTW
-└── WTW Square
+"120"
+"BTB"
+"BTB Square"
+"BTW"
+"BTW Square"
+"Diffmap"
+"Edge Detector"
+"One Color"
+"Original black and white"
+"Reversal-BT"
+"Reversal-WT"
+"Reversed black and white"
+"Videos"
+"WTB"
+"WTB Square"
+"WTW"
+"WTW Square"
 
 
 Note: The value 120 was chosen arbitrarily—feel free to modify or remove it. Don't forget to modify your code accordingly (FOLDER_120 in TransformationsConfig.h).
