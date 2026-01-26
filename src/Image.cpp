@@ -19,7 +19,9 @@
 #include <cstring>
 #include <cstdio>
 #include <algorithm>
-
+#include <fmt/color.h>
+#include <fmt/core.h>
+#include <cmath>     // for std::round
 
 #include "Image.h"
 
@@ -33,7 +35,7 @@ Image::Image(const char* filename, int channel_force) {
 	}
 }
 
-Image::Image(int w, int h, int channels) : w(w), h(h), channels(channels) {
+Image::Image(const int w, const int h, const int channels) : w(w), h(h), channels(channels) {
 	size = w*h*channels;
 	data = new uint8_t[size];
 }
@@ -72,7 +74,7 @@ bool Image::write(const char* filename) {
 			success = stbi_write_tga(filename, w, h, channels, data);
 			break;
 	}
-	if(success != 0) {
+	if (success != 0) {
 		printf("\e[32mWrote \e[36m%s\e[0m, %d, %d, %d, %zu\n", filename, w, h, channels, size);
 		return true;
 	} else {
@@ -97,20 +99,9 @@ ImageType Image::get_file_type(const char* filename) {
 	return PNG;
 }
 
-Image& Image::darkenBelowThreshold_ColorNuance(const int threshold, const int cn) {  //the blacked pixels become black
-	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
-		const int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb < threshold) {
-			data[i] = data[i + 1] = data[i + 2] = cn;    // used to be memset(data+i, 0, 3);
-		}
-	}
-	return *this;
-}
-
-
-Image& Image::whitenBelowThreshold_ColorNuance(const int threshold, const int cn) {	//the blackest pixels become white
-	const int newColor = 255 - cn;
-	for(size_t i = 0; i < size; i += channels) {
+Image& Image::below_threshold(const int threshold, const int cn, const bool useDarkNuance) {
+	const int newColor = useDarkNuance ? cn : 255 - cn;
+	for(size_t i = 0; i < size; i += static_cast<size_t>(channels)) {
 		const int rgb = (data[i] + data[i + 1] + data[i + 2]);
 		if (rgb < threshold) {
 			data[i] = data[i + 1] = data[i + 2] = newColor;
@@ -119,25 +110,69 @@ Image& Image::whitenBelowThreshold_ColorNuance(const int threshold, const int cn
 	return *this;
 }
 
-Image& Image::darkenAboveThreshold_ColorNuance(const int threshold, const int cn) {  //the whitest pixels become black
-	for(size_t i = 0; i < size; i+=channels) {
-		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb > threshold) {
-			data[i] = data[i + 1] = data[i + 2] = cn;
-		}
-	}
-	return *this;
-}
-
-Image& Image::whitenAboveThreshold_ColorNuance(const int threshold, const int cn) {    //the whitest pixels become white
-	const int newColor = 255 - cn;
-	for(size_t i = 0; i < size; i+=channels) {
-		int rgb = (data[i] + data[i+1] + data[i+2]);
+Image& Image::aboveThreshold(const int threshold, const int cn, const bool useDarkNuance) {
+	const int newColor = useDarkNuance ? cn : 255 - cn;
+	for(size_t i = 0; i < size; i += static_cast<size_t>(channels)) {
+		const int rgb = (data[i] + data[i + 1] + data[i + 2]);
 		if (rgb > threshold) {
 			data[i] = data[i + 1] = data[i + 2] = newColor;
 		}
 	}
 	return *this;
+}
+
+Image& Image::belowProportion(const float proportion, const int cn, const bool useDarkNuance) {
+    if (proportion <= 0.0f || proportion >= 1.0f) return *this;
+
+    // Calculer les valeurs RGB de tous les pixels
+    const size_t pixelCount = size / static_cast<size_t>(channels);
+    std::vector<int> rgbValues(pixelCount);
+
+    for(size_t i = 0, idx = 0; i < size; i += static_cast<size_t>(channels), ++idx) {
+        rgbValues[idx] = data[i] + data[i + 1] + data[i + 2];
+    }
+
+    // Trier pour trouver le seuil correspondant à la proportion
+    std::vector<int> sortedValues = rgbValues;
+	std::ranges::sort(sortedValues);
+    const int threshold = sortedValues[static_cast<size_t>(pixelCount * proportion)];
+
+    // Appliquer la transformation
+    const int newColor = useDarkNuance ? cn : 255 - cn;
+    for(size_t i = 0; i < size; i += static_cast<size_t>(channels)) {
+        const int rgb = data[i] + data[i + 1] + data[i + 2];
+        if (rgb <= threshold) {
+            data[i] = data[i + 1] = data[i + 2] = newColor;
+        }
+    }
+    return *this;
+}
+
+Image& Image::aboveProportion(const float proportion, const int cn, const bool useDarkNuance) {
+    if (proportion <= 0.0f || proportion >= 1.0f) return *this;
+
+    // Calculer les valeurs RGB de tous les pixels
+    const size_t pixelCount = size / static_cast<size_t>(channels);
+    std::vector<int> rgbValues(pixelCount);
+
+    for(size_t i = 0, idx = 0; i < size; i += static_cast<size_t>(channels), ++idx) {
+        rgbValues[idx] = data[i] + data[i + 1] + data[i + 2];
+    }
+
+    // Trier pour trouver le seuil correspondant à la proportion
+    std::vector<int> sortedValues = rgbValues;
+	std::ranges::sort(sortedValues, std::greater{});
+    const int threshold = sortedValues[static_cast<size_t>(pixelCount * proportion)];
+
+    // Appliquer la transformation
+    const int newColor = useDarkNuance ? cn : 255 - cn;
+    for(size_t i = 0; i < size; i += static_cast<size_t>(channels)) {
+        const int rgb = data[i] + data[i + 1] + data[i + 2];
+        if (rgb >= threshold) {
+            data[i] = data[i + 1] = data[i + 2] = newColor;
+        }
+    }
+    return *this;
 }
 
 Image& Image::darkenBelowThreshold_ColorNuance_AVX2(const int threshold, const std::uint8_t cn)
@@ -154,9 +189,9 @@ Image& Image::darkenBelowThreshold_ColorNuance_AVX2(const int threshold, const s
     for (; p <= end; p += 96)
     {
         // Load 96 bytes (32 RGB pixels) into three 256-bit registers
-        __m256i a = _mm256_loadu_si256((__m256i*)(p));
-        __m256i b = _mm256_loadu_si256((__m256i*)(p + 32));
-        __m256i c = _mm256_loadu_si256((__m256i*)(p + 64));
+    	__m256i a = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p));
+    	__m256i b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + 32));
+    	__m256i c = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + 64));
 
         // Extract R, G, B components for the first 32 bytes (a)
         __m256i r_a = _mm256_and_si256(a, _mm256_set1_epi32(0xFF));
@@ -231,9 +266,10 @@ Image& Image::darkenBelowThreshold_ColorNuance_AVX2(const int threshold, const s
         c = _mm256_blendv_epi8(c, v_cn, mask8_c);
 
         // Store the results back to memory
-        _mm256_storeu_si256((__m256i*)(p), a);
-        _mm256_storeu_si256((__m256i*)(p + 32), b);
-        _mm256_storeu_si256((__m256i*)(p + 64), c);
+    	_mm256_storeu_si256(reinterpret_cast<__m256i*>(p), a);
+    	_mm256_storeu_si256(reinterpret_cast<__m256i*>(p + 32), b);
+    	_mm256_storeu_si256(reinterpret_cast<__m256i*>(p + 64), c);
+
     }
 
     // Process remaining pixels with a scalar loop
@@ -262,9 +298,9 @@ Image& Image::whitenBelowThreshold_ColorNuance_AVX2(const int threshold, const s
     for (; p <= end; p += 96)
     {
         // Load 96 bytes (32 RGB pixels) into three 256-bit registers
-        __m256i a = _mm256_loadu_si256((__m256i*)(p));
-        __m256i b = _mm256_loadu_si256((__m256i*)(p + 32));
-        __m256i c = _mm256_loadu_si256((__m256i*)(p + 64));
+    	__m256i a = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p));
+    	__m256i b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + 32));
+    	__m256i c = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + 64));
 
         // Extract R, G, B components for the first 32 bytes (a)
         __m256i r_a = _mm256_and_si256(a, _mm256_set1_epi32(0xFF));
@@ -339,9 +375,10 @@ Image& Image::whitenBelowThreshold_ColorNuance_AVX2(const int threshold, const s
         c = _mm256_blendv_epi8(c, v_cn, mask8_c);
 
         // Store the results back to memory
-        _mm256_storeu_si256((__m256i*)(p), a);
-        _mm256_storeu_si256((__m256i*)(p + 32), b);
-        _mm256_storeu_si256((__m256i*)(p + 64), c);
+    	_mm256_storeu_si256(reinterpret_cast<__m256i*>(p), a);
+    	_mm256_storeu_si256(reinterpret_cast<__m256i*>(p + 32), b);
+    	_mm256_storeu_si256(reinterpret_cast<__m256i*>(p + 64), c);
+
     }
 
     // Process remaining pixels with a scalar loop
@@ -370,9 +407,9 @@ Image& Image::darkenAboveThreshold_ColorNuance_AVX2(const int threshold, const s
     for (; p <= end; p += 96)
     {
         // Load 96 bytes (32 RGB pixels) into three 256-bit registers
-        __m256i a = _mm256_loadu_si256((__m256i*)(p));
-        __m256i b = _mm256_loadu_si256((__m256i*)(p + 32));
-        __m256i c = _mm256_loadu_si256((__m256i*)(p + 64));
+    	__m256i a = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p));
+    	__m256i b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + 32));
+    	__m256i c = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + 64));
 
         // Extract R, G, B components for the first 32 bytes (a)
         __m256i r_a = _mm256_and_si256(a, _mm256_set1_epi32(0xFF));
@@ -427,14 +464,14 @@ Image& Image::darkenAboveThreshold_ColorNuance_AVX2(const int threshold, const s
 
 
         // Compare the sum to the threshold
-        __m256i mask_a = _mm256_cmpgt_epi16(v_th, sum_a);
-        __m256i mask_a_high = _mm256_cmpgt_epi16(v_th, sum_a_high);
+    	__m256i mask_a = _mm256_cmpgt_epi16(sum_a, v_th);  // sum > threshold
+    	__m256i mask_a_high = _mm256_cmpgt_epi16(sum_a_high, v_th);
 
-        __m256i mask_b = _mm256_cmpgt_epi16(v_th, sum_b);
-        __m256i mask_b_high = _mm256_cmpgt_epi16(v_th, sum_b_high);
+        __m256i mask_b = _mm256_cmpgt_epi16(sum_b, v_th);
+        __m256i mask_b_high = _mm256_cmpgt_epi16(sum_b_high, v_th);
 
-        __m256i mask_c = _mm256_cmpgt_epi16(v_th, sum_c);
-        __m256i mask_c_high = _mm256_cmpgt_epi16(v_th, sum_c_high);
+        __m256i mask_c = _mm256_cmpgt_epi16(sum_c, v_th);
+        __m256i mask_c_high = _mm256_cmpgt_epi16(sum_c_high, v_th);
 
         // Combine masks for each register
         __m256i mask8_a = _mm256_packus_epi16(mask_a, mask_a_high);
@@ -447,9 +484,10 @@ Image& Image::darkenAboveThreshold_ColorNuance_AVX2(const int threshold, const s
         c = _mm256_blendv_epi8(c, v_cn, mask8_c);
 
         // Store the results back to memory
-        _mm256_storeu_si256((__m256i*)(p), a);
-        _mm256_storeu_si256((__m256i*)(p + 32), b);
-        _mm256_storeu_si256((__m256i*)(p + 64), c);
+    	_mm256_storeu_si256(reinterpret_cast<__m256i*>(p), a);
+    	_mm256_storeu_si256(reinterpret_cast<__m256i*>(p + 32), b);
+    	_mm256_storeu_si256(reinterpret_cast<__m256i*>(p + 64), c);
+
     }
 
     // Process remaining pixels with a scalar loop
@@ -478,9 +516,9 @@ Image& Image::whitenAboveThreshold_ColorNuance_AVX2(const int threshold, const s
     for (; p <= end; p += 96)
     {
         // Load 96 bytes (32 RGB pixels) into three 256-bit registers
-        __m256i a = _mm256_loadu_si256((__m256i*)(p));
-        __m256i b = _mm256_loadu_si256((__m256i*)(p + 32));
-        __m256i c = _mm256_loadu_si256((__m256i*)(p + 64));
+    	__m256i a = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p));
+    	__m256i b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + 32));
+    	__m256i c = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + 64));
 
         // Extract R, G, B components for the first 32 bytes (a)
         __m256i r_a = _mm256_and_si256(a, _mm256_set1_epi32(0xFF));
@@ -535,14 +573,14 @@ Image& Image::whitenAboveThreshold_ColorNuance_AVX2(const int threshold, const s
 
 
         // Compare the sum to the threshold
-        __m256i mask_a = _mm256_cmpgt_epi16(v_th, sum_a);
-        __m256i mask_a_high = _mm256_cmpgt_epi16(v_th, sum_a_high);
+        __m256i mask_a = _mm256_cmpgt_epi16(sum_a, v_th);
+        __m256i mask_a_high = _mm256_cmpgt_epi16(sum_a_high, v_th);
 
-        __m256i mask_b = _mm256_cmpgt_epi16(v_th, sum_b);
-        __m256i mask_b_high = _mm256_cmpgt_epi16(v_th, sum_b_high);
+        __m256i mask_b = _mm256_cmpgt_epi16(sum_b, v_th);
+        __m256i mask_b_high = _mm256_cmpgt_epi16(sum_b_high, v_th);
 
-        __m256i mask_c = _mm256_cmpgt_epi16(v_th, sum_c);
-        __m256i mask_c_high = _mm256_cmpgt_epi16(v_th, sum_c_high);
+        __m256i mask_c = _mm256_cmpgt_epi16(sum_c, v_th);
+        __m256i mask_c_high = _mm256_cmpgt_epi16(sum_c_high, v_th);
 
         // Combine masks for each register
         __m256i mask8_a = _mm256_packus_epi16(mask_a, mask_a_high);
@@ -555,9 +593,10 @@ Image& Image::whitenAboveThreshold_ColorNuance_AVX2(const int threshold, const s
         c = _mm256_blendv_epi8(c, v_cn, mask8_c);
 
         // Store the results back to memory
-        _mm256_storeu_si256((__m256i*)(p), a);
-        _mm256_storeu_si256((__m256i*)(p + 32), b);
-        _mm256_storeu_si256((__m256i*)(p + 64), c);
+    	_mm256_storeu_si256(reinterpret_cast<__m256i*>(p), a);
+    	_mm256_storeu_si256(reinterpret_cast<__m256i*>(p + 32), b);
+    	_mm256_storeu_si256(reinterpret_cast<__m256i*>(p + 64), c);
+
     }
 
     // Process remaining pixels with a scalar loop
@@ -611,9 +650,9 @@ Image& Image::original_black_and_white(const int threshold) {
 Image& Image::reversed_black_and_white(const int threshold) {
 	for (size_t i = 0; i < size; i += channels) {
 
-		int rgb = data[i] + data[i + 1] + data[i + 2];
+		const int rgb = data[i] + data[i + 1] + data[i + 2];
 
-		uint8_t value = (rgb < threshold) ? 255 : 0;
+		const uint8_t value = (rgb < threshold) ? 255 : 0;
 
 		data[i] = data[i + 1] = data[i + 2] = value;
 	}
@@ -644,17 +683,68 @@ Image& Image::alternatelyDarkenAndWhitenAboveTheThreshold(int s, int first_thres
 }
 
 
-Image& Image::simplify_to_dominant_color_combinations(const int tolerance, const bool average) {
+void Image::simplify_pixel(
+	uint8_t& r, uint8_t& g, uint8_t& b,
+	const uint8_t r_val_third, const uint8_t g_val_third, const uint8_t b_val_third,
+	const uint8_t r_val_half, const uint8_t g_val_half, const uint8_t b_val_half,
+	const uint8_t r_val_full, const uint8_t g_val_full, const uint8_t b_val_full,
+	const int tolerance
+) {
+	const bool r_eq_g = approx_equal(r, g, tolerance);
+	const bool r_eq_b = approx_equal(r, b, tolerance);
+	const bool g_eq_b = approx_equal(g, b, tolerance);
 
+	// Cas 1 : Tous les canaux sont égaux
+	if (r_eq_g && r_eq_b && g_eq_b) {
+		r = r_val_third;
+		g = g_val_third;
+		b = b_val_third;
+		return;
+	}
+
+	// Cas 2 : Deux canaux sont égaux
+	if (r_eq_g) {
+		r = r_val_half;
+		g = g_val_half;
+		b = 0;
+		return;
+	} else if (r_eq_b) {
+		r = r_val_half;
+		g = 0;
+		b = b_val_half;
+		return;
+	} else if (g_eq_b) {
+		r = 0;
+		g = g_val_half;
+		b = b_val_half;
+		return;
+	}
+
+	// Cas 3 : Tous les canaux sont distincts
+	const ChannelIndices indices = get_channel_indices(r, g, b);
+	const uint8_t avgs_full[] = {r_val_full, g_val_full, b_val_full};
+	const uint8_t avgs_half[] = {r_val_half, g_val_half, b_val_half};
+
+	uint8_t new_vals[3] = {0, 0, 0};
+	new_vals[indices.max] = avgs_full[indices.max];
+	new_vals[indices.mid] = avgs_half[indices.mid];
+	new_vals[indices.min] = 0;
+
+	r = new_vals[0];
+	g = new_vals[1];
+	b = new_vals[2];
+}
+
+Image& Image::simplify_to_dominant_color_combinations_with_average(const int tolerance) {
 	for (size_t i = 0; i < size; i += channels) {
-		uint8_t r = data[i];
-		uint8_t g = data[i + 1];
-		uint8_t b = data[i + 2];
+		uint8_t& r = data[i];
+		uint8_t& g = data[i + 1];
+		uint8_t& b = data[i + 2];
 
 		const uint8_t r_third = avg_u8_round(r, SimpleColors::ONE_THIRD);
 		const uint8_t g_third = avg_u8_round(g, SimpleColors::ONE_THIRD);
 		const uint8_t b_third = avg_u8_round(b, SimpleColors::ONE_THIRD);
-		
+
 		const uint8_t r_half = avg_u8_round(r, SimpleColors::HALF);
 		const uint8_t g_half = avg_u8_round(g, SimpleColors::HALF);
 		const uint8_t b_half = avg_u8_round(b, SimpleColors::HALF);
@@ -663,68 +753,30 @@ Image& Image::simplify_to_dominant_color_combinations(const int tolerance, const
 		const uint8_t g_full = avg_u8_round(g, SimpleColors::FULL);
 		const uint8_t b_full = avg_u8_round(b, SimpleColors::FULL);
 
+		simplify_pixel(
+			r, g, b,
+			r_third, g_third, b_third,
+			r_half, g_half, b_half,
+			r_full, g_full, b_full,
+			tolerance
+		);
+	}
+	return *this;
+}
 
-		const bool r_eq_g = approx_equal(r, g, tolerance);
-		const bool r_eq_b = approx_equal(r, b, tolerance);
-		const bool g_eq_b = approx_equal(g, b, tolerance);
+Image& Image::simplify_to_dominant_color_combinations_without_average(const int tolerance) {
+	for (size_t i = 0; i < size; i += channels) {
+		uint8_t& r = data[i];
+		uint8_t& g = data[i + 1];
+		uint8_t& b = data[i + 2];
 
-		// Case 1: All three color channels are equal
-		if (r_eq_g && r_eq_b && g_eq_b) {
-			if (average) {
-				data[i]     = r_third;
-				data[i + 1] = g_third;
-				data[i + 2] = b_third;
-			} else {
-				data[i] = data[i + 1] = data[i + 2] = SimpleColors::ONE_THIRD;
-			}
-			continue;
-		}
-
-		// Case 2: Two color channels are equal and greater than the third
-		if (r_eq_g) {
-			if (average) {
-				data[i]     = r_half;
-				data[i + 1] = g_half;
-				data[i + 2] = 0;
-			} else {
-				data[i] = data[i + 1] = SimpleColors::HALF;
-				data[i + 2] = 0;
-			}
-		} else if (r_eq_b) {
-			if (average) {
-				data[i]     = r_half;
-				data[i + 1] = 0;
-				data[i + 2] = b_half;
-			} else {
-				data[i] = data[i + 2] = SimpleColors::HALF;
-				data[i + 1] = 0;
-			}
-		} else if (g_eq_b) {
-			if (average) {
-				data[i]     = 0;
-				data[i + 1] = g_half;
-				data[i + 2] = b_half;
-			} else {
-				data[i] = 0;
-				data[i + 1] = data[i + 2] = SimpleColors::HALF;
-			}
-		}
-		// Case 3: All three color channels are distinct, in descending order
-		else {
-			const ChannelIndices indices = get_channel_indices(r, g, b);
-			if (average) {
-				const uint8_t avgs_full[] = {r_full, g_full, b_full};
-				const uint8_t avgs_half[] = {r_half, g_half, b_half};
-
-				data[i + indices.max] = avgs_full[indices.max];
-				data[i + indices.mid] = avgs_half[indices.mid];
-				data[i + indices.min] = 0;
-			} else {
-				data[i + indices.max] = SimpleColors::FULL;
-				data[i + indices.mid] = SimpleColors::HALF;
-				data[i + indices.min] = 0;
-			}
-		}
+		simplify_pixel(
+			r, g, b,
+			SimpleColors::ONE_THIRD, SimpleColors::ONE_THIRD, SimpleColors::ONE_THIRD,
+			SimpleColors::HALF, SimpleColors::HALF, SimpleColors::HALF,
+			SimpleColors::FULL, SimpleColors::FULL, SimpleColors::FULL,
+			tolerance
+		);
 	}
 	return *this;
 }
@@ -800,22 +852,22 @@ Image& Image::whitenBelowThresholdRegionFraction(
 		   threshold,
 		   fraction,
 		   rectanglesToModify,
-		   [threshold](int rgb) { return rgb < threshold; },
+		   [threshold](const int rgb) { return rgb < threshold; },
 		   [newColor]() -> uint8_t { return newColor; }
 		);
 	}
 
 Image& Image::darkenAboveThresholdRegionFraction(
 	int threshold,
-	int cn,
-	int fraction,
+	const int cn,
+	const int fraction,
 	const std::vector<int>& rectanglesToModify) {
 
 	return applyThresholdTransformationRegionFraction(
 	   threshold,
 	   fraction,
 	   rectanglesToModify,
-	   [threshold](int rgb) { return rgb > threshold; },
+	   [threshold](const int rgb) { return rgb > threshold; },
 	   [cn]() -> uint8_t { return cn; }
 	);
 }
@@ -871,7 +923,7 @@ Image& Image::std_convolve_clamp_to_0(const int channel, const int ker_w, const 
     }
 
     // Allocation dynamique du buffer temporaire
-    uint8_t *new_data = new uint8_t[w * h];
+    auto *new_data = new uint8_t[w * h];
     if (new_data == nullptr) {
         fprintf(stderr, "Erreur : Échec de l'allocation mémoire pour new_data.\n");
         return *this;
@@ -930,7 +982,7 @@ Image& Image::std_convolve_clamp_to_0(const int channel, const int ker_w, const 
 
 Image& Image::std_convolve_clamp_to_border(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc) {
 	uint8_t new_data[w*h];
-	uint64_t center = cr*ker_w + cc;
+	const uint64_t center = cr*ker_w + cc;
 	for(uint64_t k=channel; k<size; k+=channels) {
 		double c = 0;
 		for (long i = -static_cast<long>(cr); i < static_cast<long>(ker_h - cr); ++i) {
@@ -982,7 +1034,8 @@ Image& Image::std_convolve_cyclic(uint8_t channel, uint32_t ker_w, uint32_t ker_
 				c += ker[center+i*static_cast<long>(ker_w)+j]*data[(row*w+col)*channels+channel];
 			}
 		}
-		new_data[k/channels] = (uint8_t)BYTE_BOUND(round(c));
+		new_data[k/channels] = static_cast<uint8_t>(BYTE_BOUND(round(c)));
+
 	}
 	for(uint64_t k=channel; k<size; k+=channels) {
 		data[k] = new_data[k/channels];
@@ -1088,7 +1141,7 @@ void Image::ifft(uint32_t n, std::complex<double> X[], std::complex<double>* x) 
 
 void Image::dft_2D(uint32_t m, uint32_t n, std::complex<double> x[], std::complex<double>* X) {
 	//x in row-major & standard order
-	std::complex<double>* intermediate = new std::complex<double>[m*n];
+	auto* intermediate = new std::complex<double>[m*n];
 	//rows
 	for(uint32_t i=0; i<m; ++i) {
 		fft(n, x+i*n, intermediate+i*n);
@@ -1178,8 +1231,8 @@ Image& Image::fd_convolve_clamp_to_0(uint8_t channel, uint32_t ker_w, uint32_t k
 }
 Image& Image::fd_convolve_clamp_to_border(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc) {
 	//calculate padding
-	uint32_t pw = 1<<((uint8_t)ceil(log2(w+ker_w-1)));
-	uint32_t ph = 1<<((uint8_t)ceil(log2(h+ker_h-1)));
+	const uint32_t pw = 1 << (static_cast<uint8_t>(ceil(log2(w + ker_w - 1))));
+	const uint32_t ph = 1 << (static_cast<uint8_t>(ceil(log2(h+ker_h-1))));
 	uint64_t psize = pw*ph;
 
 	//pad image
@@ -1211,10 +1264,13 @@ Image& Image::fd_convolve_clamp_to_border(uint8_t channel, uint32_t ker_w, uint3
 
 	return *this;
 }
-Image& Image::fd_convolve_cyclic(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc) {
+
+Image& Image::fd_convolve_cyclic(const uint8_t channel, const uint32_t ker_w,
+	const uint32_t ker_h, double ker[], const uint32_t cr, const uint32_t cc) {
 	//calculate padding
-	uint32_t pw = 1<<((uint8_t)ceil(log2(w+ker_w-1)));
-	uint32_t ph = 1<<((uint8_t)ceil(log2(h+ker_h-1)));
+	const uint32_t pw = 1 << (static_cast<uint8_t>(ceil(log2(w + ker_w - 1))));
+	const uint32_t ph = 1 << (static_cast<uint8_t>(ceil(log2(h + ker_h - 1))));
+
 	uint64_t psize = pw*ph;
 
 	//pad image
@@ -1248,7 +1304,8 @@ Image& Image::fd_convolve_cyclic(uint8_t channel, uint32_t ker_w, uint32_t ker_h
 }
 
 
-Image& Image::convolve_linear(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc) {
+Image& Image::convolve_linear(const uint8_t channel, const uint32_t ker_w, const uint32_t ker_h,
+	double ker[], const uint32_t cr, const uint32_t cc) {
 	if (static_cast<uint64_t>(ker_w) * static_cast<uint64_t>(ker_h) > 224) {
 		return fd_convolve_clamp_to_0(channel, ker_w, ker_h, ker, cr, cc);
 	} else {
@@ -1256,7 +1313,8 @@ Image& Image::convolve_linear(uint8_t channel, uint32_t ker_w, uint32_t ker_h, d
 	}
 }
 
-Image& Image::convolve_clamp_to_border(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc) {
+Image& Image::convolve_clamp_to_border(const uint8_t channel, const uint32_t ker_w,
+	const uint32_t ker_h, double ker[], const uint32_t cr, const uint32_t cc) {
 	if(ker_w*ker_h > 224) {
 		return fd_convolve_clamp_to_border(channel, ker_w, ker_h, ker, cr, cc);
 	} else {
@@ -1273,13 +1331,13 @@ Image& Image::convolve_cyclic(uint8_t channel, uint32_t ker_w, uint32_t ker_h, d
 
 
 Image& Image::diffmap(const Image& img) {
-	const int compare_width = fmin(w, img.w);
-	const int compare_height = fmin(h, img.h);
-	const int compare_channels = fmin(channels, img.channels);
+	const int compare_width = std::min(w, img.w);
+	const int compare_height = std::min(h, img.h);
+	const int compare_channels = std::min(channels, img.channels);
 
 	for (uint32_t i = 0; i < compare_height; ++i) {
 		for (uint32_t j = 0; j < compare_width; ++j) {
-			for (uint8_t k = 0; k < compare_channels; ++k) {
+			for (int k = 0; k < compare_channels; ++k) { // Changed uint8_t to int
 				data[(i * w + j) * channels + k] = static_cast<uint8_t>(BYTE_BOUND(abs(data[(i * w + j) * channels + k] - img.data[(i * img.w + j) * img.channels + k])));
 			}
 		}
@@ -1288,10 +1346,12 @@ Image& Image::diffmap(const Image& img) {
 }
 
 
+
 Image& Image::diffmap_scale(Image& img, uint8_t scl) {
-	const int compare_width = fmin(w,img.w);
-	const int compare_height = fmin(h,img.h);
-	const int compare_channels = fmin(channels,img.channels);
+	const int compare_width = std::min(w, img.w);
+	const int compare_height = std::min(h, img.h);
+	const int compare_channels = std::min(channels, img.channels);
+
 	uint8_t largest = 0;
 	for(uint32_t i=0; i<compare_height; ++i) {
 		for(uint32_t j=0; j<compare_width; ++j) {
@@ -1301,7 +1361,7 @@ Image& Image::diffmap_scale(Image& img, uint8_t scl) {
 			}
 		}
 	}
-	scl = 255/fmax(1, fmax(scl, largest));
+	scl = static_cast<uint8_t>(255 / fmax(1, fmax(scl, largest)));
 	for(int i=0; i<size; ++i) {
 		data[i] *= scl;
 	}
@@ -1322,36 +1382,36 @@ Image& Image::grayscale_avg() {
 	return *this;
 }
 
-
 Image& Image::grayscale_lum() {
 	if(channels < 3) {
 		printf("Image %p has less than 3 channels, it is assumed to already be grayscale.", this);
 	} else {
 		for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
-			int gray = 0.2126*data[i] + 0.7152*data[i+1] + 0.0722*data[i+2];
+			const int gray = 0.2126*data[i] + 0.7152*data[i+1] + 0.0722*data[i+2];
 			memset(data+i, gray, 3);
 		}
 	}
 	return *this;
 }
 
-
-Image& Image::color_mask(float r, float g, float b) {
-	if(channels < 3) {
+Image& Image::color_mask(const float r, const float g, const float b) {
+	if (channels < 3) {
 		printf("\e[31m[ERROR] Color mask requires at least 3 channels, but this image has %d channels\e[0m\n", channels);
 	} else {
-		for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
-			data[i] *= r;
-			data[i+1] *= g;
-			data[i+2] *= b;
+		for (size_t i = 0; i < size; i += static_cast<size_t>(channels)) {
+			data[i]   = static_cast<uint8_t>(std::clamp(std::round(static_cast<float>(data[i])   * r), 0.0f, 255.0f));
+			data[i+1] = static_cast<uint8_t>(std::clamp(std::round(static_cast<float>(data[i+1]) * g), 0.0f, 255.0f));
+			data[i+2] = static_cast<uint8_t>(std::clamp(std::round(static_cast<float>(data[i+2]) * b), 0.0f, 255.0f));
 		}
 	}
 	return *this;
 }
 
 
+
+
 Image& Image::encodeMessage(const char* message) {
-	uint32_t len = strlen(message) * 8;
+	const uint32_t len = strlen(message) * 8;
 	if(len + STEG_HEADER_SIZE > size) {
 		printf("\e[31m[ERROR] This message is too large (%lu bits / %zu bits)\e[0m\n", len+STEG_HEADER_SIZE, size);
 		return *this;
@@ -1424,7 +1484,7 @@ Image& Image::flipY() {
 }
 
 
-Image& Image::overlay(const Image& source, int x, int y) {
+Image& Image::overlay(const Image& source, const int x, const int y) {
 	for (int sy = 0; sy < source.h; ++sy) {
 		if (sy + y < 0) continue;
 		if (sy + y >= h) break;
@@ -1471,7 +1531,7 @@ Image& Image::overlay(const Image& source, int x, int y) {
 
 Image& Image::crop(uint16_t cx, uint16_t cy, uint16_t cw, uint16_t ch) {
 	size = cw * ch * channels;
-	uint8_t* croppedImage = new uint8_t[size];
+	auto* croppedImage = new uint8_t[size];
 	memset(croppedImage, 0, size);
 
 	for(uint16_t y = 0; y < ch; ++y) {
@@ -1504,22 +1564,19 @@ Image& Image::resizeNN(uint16_t nw, uint16_t nh) {
 	size = nw * nh * channels;
 	uint8_t* newImage = new uint8_t[size];
 
-	float scaleX = static_cast<float>(nw) / static_cast<float>(w);
-	float scaleY = static_cast<float>(nh) / static_cast<float>(h);
-
-	uint16_t sx, sy;
+	const float scaleX = static_cast<float>(nw) / static_cast<float>(w);
+	const float scaleY = static_cast<float>(nh) / static_cast<float>(h);
 
 	for(uint16_t y = 0; y < nh; ++y) {
-		sy = static_cast<uint16_t>(std::round(y / scaleY));
+		const uint16_t sy = static_cast<uint16_t>(std::round(y / scaleY));
 		for(uint16_t x = 0; x < nw; ++x) {
-			sx = static_cast<uint16_t>(std::round(x / scaleX));
+			const auto sx = static_cast<uint16_t>(std::round(x / scaleX));
 
 
 			memcpy(&newImage[(x + y * nw) * channels], &data[(sx + sy * w) * channels], channels);
 
 		}
 	}
-
 
 	w = nw;
 	h = nh;
