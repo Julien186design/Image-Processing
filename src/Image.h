@@ -1,3 +1,6 @@
+#ifndef IMAGE_H
+#define IMAGE_H
+
 #include <stdint.h>
 #include <cstdio>
 #include <complex>
@@ -64,20 +67,18 @@ struct Image {
 	bool write(const char* filename);
 
 	static ImageType get_file_type(const char* filename);
-	/*
-	Image& std_convolve_clamp_to_0(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc);
-	*/
+
 	Image& std_convolve_clamp_to_0(int channel, int ker_w, int ker_h, const double *ker, int cr, int c);
 	Image& std_convolve_clamp_to_border(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc);
 	Image& std_convolve_cyclic(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc);
 
 
-	static bool approx_equal(uint8_t a, uint8_t b, uint8_t tol) {
+	static bool approx_equal(const uint8_t a, const  uint8_t b, const uint8_t tol) {
 		const int diff = static_cast<int>(a) - static_cast<int>(b);
 		return diff >= 0 ? diff <= tol : -diff <= tol;
 	}
 
-	static uint8_t avg_u8_round(uint8_t a, uint8_t b) {
+	static uint8_t avg_u8_round(const uint8_t a, const uint8_t b) {
 		return static_cast<uint8_t>(
 			(static_cast<unsigned int>(a) +
 			 static_cast<unsigned int>(b) + 1u) / 2u
@@ -111,11 +112,10 @@ struct Image {
 
 	Image& grayscale_avg();
 
-
-	Image& darkenBelowThreshold_ColorNuance(int threshold, int cn);
-	Image& whitenBelowThreshold_ColorNuance(int threshold, int cn);
-	Image& darkenAboveThreshold_ColorNuance(int threshold, int cn);
-	Image& whitenAboveThreshold_ColorNuance(int threshold, int cn);
+	Image& below_threshold(int threshold, int cn, bool useDarkNuance);
+	Image& aboveThreshold(int threshold, int cn, bool useDarkNuance);
+	Image& belowProportion(float proportion, int cn, bool useDarkNuance);
+	Image& aboveProportion(float proportion, int cn, bool useDarkNuance);
 
 	Image& darkenBelowThreshold_ColorNuance_AVX2(int threshold, uint8_t cn);
 	Image& whitenBelowThreshold_ColorNuance_AVX2(int threshold, uint8_t cn);
@@ -131,8 +131,16 @@ struct Image {
 
 	Image& original_black_and_white(int threshold);
 	Image& reversed_black_and_white(int threshold);
+	
+	static void simplify_pixel(
+	uint8_t& r, uint8_t& g, uint8_t& b,
+	uint8_t r_val_third, uint8_t g_val_third, uint8_t b_val_third,
+	uint8_t r_val_half, uint8_t g_val_half, uint8_t b_val_half,
+	uint8_t r_val_full, uint8_t g_val_full, uint8_t b_val_full,
+	int tolerance);
 
-	Image& simplify_to_dominant_color_combinations(int tolerance, bool average);
+	Image& simplify_to_dominant_color_combinations_with_average(int tolerance);
+	Image& simplify_to_dominant_color_combinations_without_average(int tolerance);
 
 	template<typename ConditionFunc, typename TransformFunc>
 	Image& applyThresholdTransformationRegionFraction(
@@ -177,6 +185,11 @@ struct Image {
 
 };
 
+struct ImageInfo {
+	std::string baseName;
+	std::string inputPath;
+};
+
 
 struct Font {
 	SFT sft = {nullptr, 12, 12, 0, 0, SFT_DOWNWARD_Y|SFT_RENDER_IMAGE};
@@ -190,8 +203,20 @@ struct Font {
 	~Font() {
 		sft_freefont(sft.font);
 	}
-	void setSize(uint16_t size) {
+	void setSize(const uint16_t size) {
 		sft.xScale = size;
 		sft.yScale = size;
 	}
 };
+
+inline ImageInfo extractImageInfo(const std::string& inputFile) {
+	const size_t dotPos = inputFile.find_last_of('.');
+	const size_t slashPos = inputFile.find_last_of('/');
+	const std::string folderName = inputFile.substr(0, slashPos);
+	const std::string baseName = inputFile.substr(slashPos + 1, dotPos);
+	const std::string inputPath = "Input/" + folderName + "/" + baseName;
+
+	return {baseName, inputPath};
+}
+
+#endif // IMAGE_H
