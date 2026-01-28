@@ -5,6 +5,7 @@
 #include <string>
 #include <cstring>
 #include <immintrin.h> // For AVX2 intrinsics
+#include <format>
 
 using GenericTransformationFunc = std::function<void(Image&, int, const std::vector<int>&)>;
 
@@ -169,6 +170,19 @@ void removeColors(
 	buffer.saveAs(outputPath.c_str());
 }
 
+std::string makeWeightedColors(float r, float g, float b) {
+	std::string s;
+	s.reserve(32); // pour éviter plusieurs allocations
+
+	s += ' ';
+	s += std::format("{:.2f}", r);
+	s += '-';
+	s += std::format("{:.2f}", g);
+	s += '-';
+	s += std::format("{:.2f}", b);
+
+	return s;
+}
 
 void oneColorTransformations(
     const Image& baseImage,
@@ -181,8 +195,17 @@ void oneColorTransformations(
 
 	ImageBuffer buffer(baseImage.w, baseImage.h, baseImage.channels);
 
+	constexpr float weightOfRed = 0.25f;
+	constexpr float weightOfGreen = 1.0f;
+	constexpr float weightOfBlue = 0.75f;
+	const auto [r_third, g_third, b_third,
+		r_half, g_half, b_half,
+		r_full, g_full, b_full] =
+		calculateWeightedColors(weightOfRed, weightOfGreen, weightOfBlue);
+
 	const std::string prefix0 = ONE_COLOR_FOLDER + baseName + " - Average 0 - Tolerance ";
 	const std::string prefix1 = ONE_COLOR_FOLDER + baseName + " - Average 1 - Tolerance ";
+	const std::string weightedColors = makeWeightedColors(weightOfRed, weightOfGreen, weightOfBlue);
 	const std::string suffix = ".png";
 
 	for (int tole = tolerance[0]; tole <= tolerance[1]; tole += tolerance[2]) {
@@ -190,8 +213,10 @@ void oneColorTransformations(
 		outputPath.reserve(256);
 		buffer.resetFrom(baseImage);
 
-		buffer.get().simplify_to_dominant_color_combinations_without_average(tole);
-		buffer.saveAs((prefix0 + std::to_string(tole) + suffix).c_str());
+		buffer.get().simplify_to_dominant_color_combinations_without_average(
+			tole, r_third, g_third, b_third, r_half, g_half, b_half, r_full, g_full, b_full
+		);
+		buffer.saveAs((prefix0 + std::to_string(tole) + weightedColors + suffix).c_str());
 
 		// Restaurer au lieu de resetFrom si possible
 		buffer.get().simplify_to_dominant_color_combinations_with_average(tole);
@@ -441,7 +466,7 @@ void edge_detector(
 	int img_size = img.w*img.h;
 
 	Image gray_img(img.w, img.h, 1);
-	printf("Dimensions de gray_img : %d x %d, data=%p\n", gray_img.w, gray_img.h, gray_img.data);
+	//printf("Dimensions de gray_img : %d x %d, data=%p\n", gray_img.w, gray_img.h, gray_img.data);
 	if (gray_img.w <= 0 || gray_img.h <= 0 || gray_img.data == nullptr) {
 		fprintf(stderr, "Erreur : gray_img invalide !\n");
 		return;
@@ -459,10 +484,11 @@ void edge_detector(
 		2*inv16, 4*inv16, 2*inv16,
 		inv16, 2*inv16, inv16
 	};
+	/*
 	printf("Noyau (kernel) : [");
 	for (int i = 0; i < 9; ++i) printf("%.2f, ", gauss[i]);
 	printf("]\n");
-
+	*/
 	gray_img.convolve_linear(0, 3, 3, gauss, 1, 1);
 	for(uint64_t k=0; k<img_size; ++k) {
 		blur_img.data[k] = gray_img.data[k];
@@ -626,6 +652,14 @@ void processImageTransforms(
     const bool alternatingBlackAndWhite,
     const bool oneColor
 ) {
+
+	if (inputPath.length() >= 4 && [&]() {
+		const std::string ext = inputPath.substr(inputPath.length() - 4);
+		return ext == ".mp4" || ext == ".MP4";
+	}()) {
+		std::cout << "MP4 file detected, no transformation applied." << std::endl;
+		return;
+	}
 
 	std::cout << inputPath << std::endl;
 
