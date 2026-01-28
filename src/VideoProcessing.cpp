@@ -1,775 +1,372 @@
-#include "ImageProcessing.h"
+#include "VideoProcessing.h"
 #include "TransformationsConfig.h"
+#include "Image.h"
+#include "ImageProcessing.h"
+#include <opencv2/opencv.hpp>
 #include <vector>
-#include <functional>
 #include <string>
-#include <cstring>
-#include <immintrin.h> // For AVX2 intrinsics
-#include <format>
-
-using GenericTransformationFunc = std::function<void(Image&, int, const std::vector<int>&)>;
-
-struct TransformationContext {
-    const Image& baseImage;
-    const std::string& baseName;
-    int firstThreshold;
-    int lastThreshold;
-    int step;
-    bool saveAt120;
-    std::string folder120;
-};
+#include <iostream>
+#include <fstream>
 
 
-void applyAndSaveGenericTransformations(
-    const Image& baseImage,
-    const std::vector<GenericTransformationFunc>& transforms,
-    const std::vector<std::string>& outputDirs,
-    const std::vector<std::string>& suffixes,
+void several_colors_transformations_streaming(
     const std::string& baseName,
-    const std::string& transformationType,
-    const int threshold,
-    const int lastThreshold,
-    const int step,
-    const bool saveAt120,
-    const std::string& folder120,
-    const std::vector<int>& additionalParams
-) {
-    ImageBuffer modified(baseImage.w, baseImage.h, baseImage.channels);
-
-    for (int currentThreshold = threshold; currentThreshold <= lastThreshold; currentThreshold += step) {
-        for (size_t i = 0; i < transforms.size(); ++i) {
-            // LOGGING
-            // printf("  Transformation %zu/%zu: %s\n", i+1, transforms.size(), suffixes[i].c_str());
-
-            modified.resetFrom(baseImage);
-
-            transforms[i](modified.get(), currentThreshold, additionalParams);
-
-            std::string outputPath = OutputPathBuilder::buildStandard(
-                outputDirs[i],
-                baseName,
-                transformationType,
-                suffixes[i],
-                currentThreshold / 3
-            );
-            modified.saveAs(outputPath.c_str());
-
-            if (saveAt120 && currentThreshold == 360) {
-                std::string specialPath = OutputPathBuilder::build120(
-                    folder120,
-                    baseName,
-                    transformationType,
-                    suffixes[i]
-                );
-                modified.saveAs(specialPath.c_str());
-            }
-        }
-
-    }
-}
-
-
-void applyTransformationsWrapper(
-    const Image& baseImage,
-    const std::vector<TransformationFunc>& transforms,
-    const std::vector<std::string>& outputDirs,
-    const std::vector<std::string>& suffixes,
-    const std::string& baseName,
-    const int threshold,
-    const int lastThreshold,
-    const int step,
-    const bool saveAt120,
-    const std::string& folder120
-) {
-    applyAndSaveGenericTransformations(
-        baseImage,
-        wrapSimpleTransforms(transforms),
-        outputDirs,
-        suffixes,
-        baseName,
-        " - ",
-        threshold,
-        lastThreshold,
-        step,
-        saveAt120,
-        folder120,
-        {}
-    );
-}
-
-
-
-void applyAndSaveReversalTransformations(
-    const Image& baseImage,
-    const std::vector<TransformationFunc>& transforms,
-    const std::vector<std::string>& outputDirs,
-    const std::vector<std::string>& suffixes,
-    const std::string& baseName,
-    const int threshold,
-    const int lastThreshold,
-    const int step,
-    const bool saveAt120,
-    const std::string& folder120
-) {
-    applyAndSaveGenericTransformations(
-        baseImage,
-        wrapSimpleTransforms(transforms),
-        outputDirs,
-        suffixes,
-        baseName,
-        " Reversal - ",
-        threshold,
-        lastThreshold,
-        step,
-        saveAt120,
-        folder120,
-        {}
-    );
-}
-
-void applyAndSaveAlternatingTransformations(
-    const Image& baseImage,
-    const std::vector<AlternatingTransformation>& transforms,
-    const std::vector<std::string>& outputDirs,
-    const std::vector<std::string>& suffixes,
-    const std::string& baseName,
-    const int firstThreshold,
-    const int lastThreshold,
-    const int step,
-    const bool saveAt120,
-    const std::string& folder120
-) {
-    const std::vector<int> additionalParams = {firstThreshold, lastThreshold, step};
-
-    applyAndSaveGenericTransformations(
-        baseImage,
-        wrapAlternatingTransforms(transforms),
-        outputDirs,
-        suffixes,
-        baseName,
-        " Alternating - ",
-        firstThreshold,
-        lastThreshold,
-        step,
-        saveAt120,
-        folder120,
-        additionalParams
-    );
-}
-
-
-void removeColors(
-	const Image& baseImage,
-	const std::string& baseName
-) {
-	ImageBuffer buffer(baseImage.w, baseImage.h, baseImage.channels);
-	buffer.resetFrom(baseImage);
-	buffer.get().color_mask(1.0f, 0.0f, 1.0f);
-
-	const std::string outputPath = std::string(OUTPUT_FOLDER) + baseName + ".png";
-	buffer.saveAs(outputPath.c_str());
-}
-
-std::string makeWeightedColors(float r, float g, float b) {
-	std::string s;
-	s.reserve(32); // pour éviter plusieurs allocations
-
-	s += ' ';
-	s += std::format("{:.2f}", r);
-	s += '-';
-	s += std::format("{:.2f}", g);
-	s += '-';
-	s += std::format("{:.2f}", b);
-
-	return s;
-}
-
-void oneColorTransformations(
-    const Image& baseImage,
-    const std::string& baseName,
-    const std::vector<int>& tolerance
-) {
-
-	const std::string ONE_COLOR_FOLDER = std::string(OUTPUT_FOLDER) + "One Color/";
-	const std::string DIFFMAP_FOLDER = std::string(OUTPUT_FOLDER) + "Diffmap/";
-
-	ImageBuffer buffer(baseImage.w, baseImage.h, baseImage.channels);
-
-	constexpr float weightOfRed = 0.25f;
-	constexpr float weightOfGreen = 1.0f;
-	constexpr float weightOfBlue = 0.75f;
-	const auto [r_third, g_third, b_third,
-		r_half, g_half, b_half,
-		r_full, g_full, b_full] =
-		calculateWeightedColors(weightOfRed, weightOfGreen, weightOfBlue);
-
-	const std::string prefix0 = ONE_COLOR_FOLDER + baseName + " - Average 0 - Tolerance ";
-	const std::string prefix1 = ONE_COLOR_FOLDER + baseName + " - Average 1 - Tolerance ";
-	const std::string weightedColors = makeWeightedColors(weightOfRed, weightOfGreen, weightOfBlue);
-	const std::string suffix = ".png";
-
-	for (int tole = tolerance[0]; tole <= tolerance[1]; tole += tolerance[2]) {
-		std::string outputPath;
-		outputPath.reserve(256);
-		buffer.resetFrom(baseImage);
-
-		buffer.get().simplify_to_dominant_color_combinations_without_average(
-			tole, r_third, g_third, b_third, r_half, g_half, b_half, r_full, g_full, b_full
-		);
-		buffer.saveAs((prefix0 + std::to_string(tole) + weightedColors + suffix).c_str());
-
-		// Restaurer au lieu de resetFrom si possible
-		buffer.get().simplify_to_dominant_color_combinations_with_average(tole);
-		buffer.saveAs((prefix1 + std::to_string(tole) + suffix).c_str());
-	}
-
-	for (int i = tolerance[0]; i <= tolerance[1]; i += tolerance[2]) {
-		std::string path1 = ONE_COLOR_FOLDER + baseName + " - Average 1 - Tolerance " + std::to_string(i) + ".png";
-		std::string path2 = ONE_COLOR_FOLDER + baseName + " - Average 0 - Tolerance " + std::to_string(i) + ".png";
-
-		Image image1(path1.c_str());
-		Image image2(path2.c_str());
-
-		ImageBuffer diffBuffer(image1.w, image1.h, image1.channels);
-		diffBuffer.resetFrom(image1);
-		diffBuffer.get().diffmap(image2);
-
-		std::string outputPath = DIFFMAP_FOLDER + baseName + " - Diffmap - Tolerance " + std::to_string(i) + ".png";
-		diffBuffer.saveAs(outputPath.c_str());
-	}
-}
-
-void several_colors_transformations_AVX2(
-	const Image& baseImage,
-	const std::string& baseName,
-	const int firstThreshold,
-	const int lastThreshold,
-	const int step,
-	const int firstColorNuance,
-	const int lastColorNuance,
-	const int stepColorNuance
-) {
-	ImageBuffer modified(baseImage.w, baseImage.h, baseImage.channels);
-	std::ostringstream oss;
-
-	for (int currentThreshold = firstThreshold; currentThreshold <= lastThreshold; currentThreshold += step) {
-		const int threshold_div3 = currentThreshold / 3;
-
-		for (size_t transformIdx = 0; transformIdx < colors_nuances_transformations_AVX2.size(); ++transformIdx) {
-			const auto& transform = colors_nuances_transformations_AVX2[transformIdx];
-			const auto& outputDir = total_step_by_step_output_dirs[transformIdx];
-			const auto& suffix = total_step_by_step_suffixes[transformIdx];
-
-			for (int currentColorNuance = firstColorNuance;
-				currentColorNuance <= lastColorNuance;
-				currentColorNuance += stepColorNuance) {
-
-				modified.resetFrom(baseImage);
-				transform(modified.get(), currentThreshold, static_cast<std::uint8_t>(currentColorNuance));
-
-				// Construction du chemin
-				oss.str("");
-				oss << outputDir << baseName << " - " << suffix << " - "
-					<< threshold_div3 << " - CN " << currentColorNuance << ".png";
-
-				modified.saveAs(oss.str().c_str());
-				}
-		}
-	}
-}
-
-void several_colors_transformations_by_threshold(
-    const Image& baseImage,
-    const std::string& baseName,
-    const int firstThreshold,
-    const int lastThreshold,
-    const int step,
-    const std::vector<int>& colorNuances
-) {
-    ImageBuffer modified(baseImage.w, baseImage.h, baseImage.channels);
-
-    auto process = [&](const int currentThreshold, const bool duplicate120) {
-        for (size_t transformIdx = 0; transformIdx < transformations_by_threshold.size(); ++transformIdx) {
-            for (int currentColorNuance = colorNuances[0];
-                 currentColorNuance <= colorNuances[1];
-                 currentColorNuance += colorNuances[2]) {
-
-                modified.resetFrom(baseImage);
-
-                transformations_by_threshold[transformIdx](
-                    modified.get(), currentThreshold, currentColorNuance
-                );
-
-                // Sortie standard
-                std::string outputPath = OutputPathBuilder::buildStandard(
-                    total_step_by_step_output_dirs[transformIdx],
-                    baseName,
-                    " - ",
-                    total_step_by_step_suffixes[transformIdx],
-                    currentThreshold / 3
-                );
-                outputPath += " - CN " + std::to_string(currentColorNuance) + ".png";
-                modified.saveAs(outputPath.c_str());
-
-                // Duplication spécifique pour 120
-                if (duplicate120) {
-                    std::string path120 = OutputPathBuilder::build120(
-                        FOLDER_120,
-                        baseName,
-                        " - ",
-                        total_step_by_step_suffixes[transformIdx]
-                    );
-                    path120 += "120 - CN " + std::to_string(currentColorNuance) + ".png";
-                    modified.saveAs(path120.c_str());
-                }
-            }
-        }
-    };
-
-    process(360, true);
-
-    for (int currentThreshold = firstThreshold;
-         currentThreshold <= lastThreshold;
-         currentThreshold += step) {
-
-        if (currentThreshold == 360) {
-            continue;
-        }
-
-        process(currentThreshold, false);
-    }
-}
-
-void several_colors_transformations_by_proportion(
-    const Image& baseImage,
-    const std::string& baseName,
+    const std::string& inputPath,
+    const int fps,
     const std::vector<float>& proportions,
     const std::vector<int>& colorNuances
 ) {
+    const Image baseImage(inputPath.c_str());
+
+    // Pre-convert base image to BGR format (OpenCV native)
+    std::vector<uint8_t> baseImageBGR(baseImage.size);
+    for(size_t i = 0; i < baseImage.size; i += 3) {
+        baseImageBGR[i]     = baseImage.data[i + 2]; // B
+        baseImageBGR[i + 1] = baseImage.data[i + 1]; // G
+        baseImageBGR[i + 2] = baseImage.data[i];     // R
+    }
+
     ImageBuffer modified(baseImage.w, baseImage.h, baseImage.channels);
+    std::vector<uint8_t> modifiedBGR(baseImage.size);
 
-    auto process = [&](const float currentProportion, const bool duplicate50) {
-        for (size_t transformIdx = 0; transformIdx < transformations_by_proportion.size(); ++transformIdx) {
-            for (int currentColorNuance = colorNuances[0];
-                 currentColorNuance <= colorNuances[1];
-                 currentColorNuance += colorNuances[2]) {
+    const int numSteps = static_cast<int>((proportions[1] - proportions[0]) / proportions[2]) + 1;
+    const int nFrames = numSteps * 2 * (((colorNuances[1] - colorNuances[0]) / colorNuances[2]) + 1);
 
-                modified.resetFrom(baseImage);
+    const std::string colorNuancesToString = "{" + std::to_string(colorNuances[0]) + "-" +
+                std::to_string(colorNuances[1]) + "-" + std::to_string(colorNuances[2]) + "}";
+    const std::string outputVideoPath = std::string(FOLDER_VIDEOS) + baseName + " - " +
+        std::to_string(nFrames) + " images - " + std::to_string(fps) + " fps - " +
+            colorNuancesToString + ".mp4";
 
-                transformations_by_proportion[transformIdx](
-                    modified.get(), currentProportion, currentColorNuance
-                );
+    cv::VideoWriter video(outputVideoPath,
+        cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
+        fps,
+        cv::Size(baseImage.w, baseImage.h));
 
-                // Sortie standard
-                std::string outputPath = OutputPathBuilder::buildStandard(
-                    total_step_by_step_output_dirs[transformIdx],
-                    baseName,
-                    " - ",
-                    total_step_by_step_suffixes[transformIdx],
-                    static_cast<int>(currentProportion * 100)
-                );
-                outputPath += "% - CN " + std::to_string(currentColorNuance) + ".png";
-                modified.saveAs(outputPath.c_str());
+    // Pre-allocate cv::Mat wrapper (no data copy)
+    cv::Mat frameBGR(baseImage.h, baseImage.w, CV_8UC3, modifiedBGR.data());
 
-                // Duplication spécifique pour 0.5
-                if (duplicate50) {
-                    std::string path50 = OutputPathBuilder::build120(
-                        FOLDER_120,
-                        baseName,
-                        " - ",
-                        total_step_by_step_suffixes[transformIdx]
-                    );
-                    path50 += " 50% - CN " + std::to_string(currentColorNuance) + ".png";
-                    modified.saveAs(path50.c_str());
-                }
+    // ========== PRE-COMPUTE THRESHOLDS ==========
+    const size_t pixelCount = baseImage.w * baseImage.h;
+    std::vector<int> rgbSums(pixelCount);
+
+    for(size_t i = 0, idx = 0; i < baseImage.size; i += baseImage.channels, ++idx) {
+        rgbSums[idx] = baseImage.data[i] + baseImage.data[i+1] + baseImage.data[i+2];
+    }
+
+    std::vector<int> thresholds(numSteps);
+    std::vector<int> sortedRGB = rgbSums;
+    std::ranges::sort(sortedRGB);
+
+    for(int i = 0; i < numSteps; ++i) {
+        const float cp = proportions[0] + i * proportions[2];
+        thresholds[i] = sortedRGB[static_cast<size_t>(pixelCount * cp)];
+    }
+
+    // ========== OPTIMIZED FRAME WRITER ==========
+    auto writeFrame = [&]() {
+        // Convert RGB to BGR in-place
+        for(size_t i = 0; i < baseImage.size; i += 3) {
+            modifiedBGR[i]     = modified.get().data[i + 2]; // B
+            modifiedBGR[i + 1] = modified.get().data[i + 1]; // G
+            modifiedBGR[i + 2] = modified.get().data[i];     // R
+        }
+        video.write(frameBGR); // frameBGR already points to modifiedBGR
+    };
+
+    // ========== PRE-COMPUTE PIXEL MASKS ==========
+    std::vector<std::vector<size_t>> pixelsBelowThreshold(numSteps);
+    for(int propIdx = 0; propIdx < numSteps; ++propIdx) {
+        pixelsBelowThreshold[propIdx].reserve(pixelCount / 2); // Estimate
+        for(size_t pixelIdx = 0; pixelIdx < pixelCount; ++pixelIdx) {
+            if(rgbSums[pixelIdx] <= thresholds[propIdx]) {
+                pixelsBelowThreshold[propIdx].push_back(pixelIdx * baseImage.channels);
             }
+        }
+    }
+
+    // ========== OPTIMIZED PROCESSING ==========
+    auto process = [&](const int propIdx, const bool reverseOrder) {
+        const auto& pixelIndices = pixelsBelowThreshold[propIdx];
+        const int startIdx = reverseOrder ? 1 : 0;
+        const int reverseIdx = reverseOrder ? 0 : 1;
+
+        // Phase 1: ascending colorNuance
+        for(int colorNuance = colorNuances[0];
+            colorNuance <= colorNuances[1];
+            colorNuance += colorNuances[2])
+        {
+            if(colorNuance == colorNuances[0]) {
+                modified.resetFrom(baseImage);
+            }
+
+            const uint8_t newColor = (startIdx == 1) ? colorNuance : (255 - colorNuance);
+
+            // Only modify pixels below threshold
+            for(const size_t byteIdx : pixelIndices) {
+                modified.get().data[byteIdx] =
+                modified.get().data[byteIdx + 1] =
+                modified.get().data[byteIdx + 2] = newColor;
+            }
+            writeFrame();
+        }
+
+        // Phase 2: descending colorNuance
+        for(int colorNuance = colorNuances[1];
+            colorNuance >= colorNuances[0];
+            colorNuance -= colorNuances[2])
+        {
+            const uint8_t newColor = (reverseIdx == 1) ? colorNuance : (255 - colorNuance);
+
+            // Only modify pixels above threshold
+            for(const size_t byteIdx : pixelIndices) {
+                modified.get().data[byteIdx] =
+                modified.get().data[byteIdx + 1] =
+                modified.get().data[byteIdx + 2] = newColor;
+            }
+            writeFrame();
         }
     };
 
-    process(0.5f, true);
-
-	const int numSteps = static_cast<int>((proportions[1] - proportions[0]) / proportions[2]) + 1;
-	for (int i = 0; i < numSteps; ++i) {
-		const float currentProportion = proportions[0] + i * proportions[2];
-		if (std::abs(currentProportion - 0.5f) < 0.001f) {
-			continue;
-		}
-		process(currentProportion, false);
-	}
-
-}
-
-
-void several_colors_partial_transformations(
-    const Image& baseImage,
-    const std::vector<GenericTransformationFuncWithColorNuances>& transforms,
-    const std::string& baseName,
-    const int firstThreshold,
-    const int lastThreshold,
-    const int step,
-    const int fraction,
-    std::vector<int>& rectangles,
-    const std::vector<int>& colorNuances
-) {
-    ImageBuffer modified(baseImage.w, baseImage.h, baseImage.channels);
-
-    const std::vector<std::string> partialDirs = generatePartialOutputDirs();
-    const std::vector<std::string> partialSuffixes = generatePartialSuffixes();
-
-    bool diagonal = false;
-
-    if (rectangles[0] == -1) {
-        rectangles.erase(rectangles.begin());
-        diagonal = true;
+    bool reverseOrder = false;
+    for(int i = 0; i < numSteps; ++i) {
+        const float cp = proportions[0] + i * proportions[2];
+        std::cout << "Processing proportion " << cp << std::endl;
+        process(i, reverseOrder);
+        reverseOrder = !reverseOrder;
     }
 
-    for (int currentThreshold = firstThreshold; currentThreshold <= lastThreshold; currentThreshold += step) {
-        for (size_t transformIdx = 0; transformIdx < partialTransformationsFunc.size(); ++transformIdx) {
-            for (int currentColorNuance = colorNuances[0];
-                currentColorNuance <= colorNuances[1]; currentColorNuance += colorNuances[2]) {
+    video.release();
+    std::cout << "\n" << outputVideoPath << " created\n";
+}
 
-                modified.resetFrom(baseImage);
+void edge_detector_video(
+    const std::string& baseName,
+    const std::string& inputVideoPath,
+    const std::vector<int>& frames
+) {
+    cv::VideoCapture capture(inputVideoPath);
 
-                transforms[transformIdx](modified.get(), currentThreshold,
-                    currentColorNuance, fraction, rectangles);
+    if (!capture.isOpened()) {
+        std::cerr << "Error: cannot open " << inputVideoPath << std::endl;
+        return;
+    }
 
-                std::string outputPath = OutputPathBuilder::buildStandard(
-                    partialDirs[transformIdx],
-                    baseName,
-                    " - ",
-                    partialSuffixes[transformIdx],
-                    currentThreshold / 3
-                );
+    const int width = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_WIDTH));
+    const int height = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_HEIGHT));
+    const int totalFrames = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_COUNT));
+    std::cout << "totalFrames " << totalFrames << std::endl;
+    const double sourceFps = capture.get(cv::CAP_PROP_FPS);
+    const int fps = static_cast<int>(sourceFps);
 
-                if (diagonal) {
-                    outputPath += " - " + std::to_string(rectangles.size()) + " Squares ";
-                } else {
-                    outputPath += " - Rectangles " + std::to_string(rectangles[0]) +
-                    " - " + std::to_string(rectangles.back());
+    const int startFrame = std::max(0, frames[0]);
+    const int endFrame = (frames[1] <= 0 || frames[1] > totalFrames) ? totalFrames : frames[1];
+    const int framesToProcess = endFrame - startFrame;
+
+    if (framesToProcess <= 0) {
+        std::cerr << "Error: invalid frame range [" << startFrame << ", " << endFrame << "]\n";
+        return;
+    }
+
+    const std::string tempVideoPath = std::string(FOLDER_VIDEOS) + baseName + "_temp.mp4";
+    std::string outputVideoPath = std::string(FOLDER_VIDEOS) + baseName +
+        " - Edge Detector - " + std::to_string(framesToProcess) + " frames ";
+    if (framesToProcess == totalFrames) {
+        outputVideoPath += "- "  +  std::to_string(fps) + " fps.mp4";
+    } else {
+        outputVideoPath += "{" + std::to_string(frames[0]) + "-" + std::to_string(frames[1]) + "} " +
+            std::to_string(fps) + " fps.mp4";
+    }
+
+    cv::VideoWriter video(tempVideoPath,
+        cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
+        fps,
+        cv::Size(width, height));
+
+    if (!video.isOpened()) {
+        std::cerr << "Error: cannot create " << tempVideoPath << std::endl;
+        return;
+    }
+
+    const size_t imgSize = width * height;
+
+    // Pre-computed Gaussian kernel
+    constexpr double inv16 = 1.0 / 16.0;
+    constexpr double gauss[9] = {
+        inv16, 2*inv16, inv16,
+        2*inv16, 4*inv16, 2*inv16,
+        inv16, 2*inv16, inv16
+    };
+    constexpr double threshold = 0.09;
+
+    // Skip to start frame
+    capture.set(cv::CAP_PROP_POS_FRAMES, startFrame);
+
+    int frameIdx = 0;
+    cv::Mat frameBGR(height, width, CV_8UC3);
+
+    // Thread-local buffers (avoiding allocation in loop)
+    std::vector<uint8_t> grayData(imgSize);
+    std::vector<double> blurData(imgSize);
+    std::vector<double> tx(imgSize), ty(imgSize);
+    std::vector<double> gx(imgSize), gy(imgSize);
+    std::vector<double> g(imgSize), theta(imgSize);
+    std::vector<uint8_t> outputRGB(imgSize * 3);
+
+    while (frameIdx < framesToProcess) {
+        if (!capture.read(frameBGR)) break;
+
+        ++frameIdx;
+        std::cout << "Frame " << frameIdx << "/" << framesToProcess << "\r" << std::flush;
+
+        // BGR → Grayscale (average) - PARALLELIZED
+        #pragma omp parallel for
+        for (int i = 0; i < imgSize; ++i) {
+            const uint8_t* pixel = frameBGR.data + i * 3;
+            grayData[i] = static_cast<uint8_t>((pixel[0] + pixel[1] + pixel[2]) / 3);
+        }
+
+        // Gaussian blur (3x3) - PARALLELIZED
+        std::ranges::fill(blurData, 0.0);
+        #pragma omp parallel for
+        for (int r = 1; r < height - 1; ++r) {
+            for (int c = 1; c < width - 1; ++c) {
+                double sum = 0.0;
+                for (int kr = -1; kr <= 1; ++kr) {
+                    for (int kc = -1; kc <= 1; ++kc) {
+                        sum += grayData[(r + kr) * width + (c + kc)] *
+                               gauss[(kr + 1) * 3 + (kc + 1)];
+                    }
                 }
-                outputPath += " CN " +
-                        std::to_string(currentColorNuance) + ".png";
-                modified.saveAs(outputPath.c_str());
+                blurData[r * width + c] = sum;
             }
         }
+
+        // Scharr separable convolution - PARALLELIZED
+        std::ranges::fill(tx, 0.0);
+        std::ranges::fill(ty, 0.0);
+        #pragma omp parallel for
+        for (int r = 0; r < height; ++r) {
+            for (uint32_t c = 1; c < width - 1; ++c) {
+                const size_t idx = r * width + c;
+                tx[idx] = blurData[idx + 1] - blurData[idx - 1];
+                ty[idx] = 47 * blurData[idx + 1] + 162 * blurData[idx] + 47 * blurData[idx - 1];
+            }
+        }
+
+        std::ranges::fill(gx, 0.0);
+        std::ranges::fill(gy, 0.0);
+        #pragma omp parallel for
+        for (int c = 1; c < width - 1; ++c) {
+            for (uint32_t r = 1; r < height - 1; ++r) {
+                const size_t idx = r * width + c;
+                gx[idx] = 47 * tx[idx + width] + 162 * tx[idx] + 47 * tx[idx - width];
+                gy[idx] = ty[idx + width] - ty[idx - width];
+            }
+        }
+
+        // Magnitude and angle - PARALLELIZED with reduction
+        double mx = -INFINITY, mn = INFINITY;
+
+        #pragma omp parallel
+        {
+            double local_mx = -INFINITY;
+            double local_mn = INFINITY;
+
+            #pragma omp for nowait
+            for (int k = 0; k < imgSize; ++k) {
+                const double x = gx[k];
+                const double y = gy[k];
+                g[k] = std::sqrt(x * x + y * y);
+                theta[k] = std::atan2(y, x);
+                local_mx = std::max(local_mx, g[k]);
+                local_mn = std::min(local_mn, g[k]);
+            }
+
+            #pragma omp critical
+            {
+                mx = std::max(mx, local_mx);
+                mn = std::min(mn, local_mn);
+            }
+        }
+
+        // HSL → RGB with thresholding - PARALLELIZED
+        const double range = (mx == mn) ? 1.0 : (mx - mn);
+        #pragma omp parallel for
+        for (int k = 0; k < imgSize; ++k) {
+            const double h = theta[k] * 180.0 / M_PI + 180.0;
+            const double v = ((g[k] - mn) / range > threshold) ? (g[k] - mn) / range : 0.0;
+            const double s = v, l = v;
+
+            const double c = (1 - std::abs(2 * l - 1)) * s;
+            const double x = c * (1 - std::abs(std::fmod(h / 60.0, 2) - 1));
+            const double m = l - c / 2.0;
+
+            double rt = 0, gt = 0, bt = 0;
+            if (h < 60)       { rt = c; gt = x; }
+            else if (h < 120) { rt = x; gt = c; }
+            else if (h < 180) { gt = c; bt = x; }
+            else if (h < 240) { gt = x; bt = c; }
+            else if (h < 300) { bt = c; rt = x; }
+            else              { bt = x; rt = c; }
+
+            outputRGB[k * 3]     = static_cast<uint8_t>(255 * (rt + m));
+            outputRGB[k * 3 + 1] = static_cast<uint8_t>(255 * (gt + m));
+            outputRGB[k * 3 + 2] = static_cast<uint8_t>(255 * (bt + m));
+        }
+
+        // RGB → BGR for OpenCV - PARALLELIZED
+        #pragma omp parallel for
+        for (int i = 0; i < imgSize; ++i) {
+            frameBGR.data[i * 3]     = outputRGB[i * 3 + 2]; // B
+            frameBGR.data[i * 3 + 1] = outputRGB[i * 3 + 1]; // G
+            frameBGR.data[i * 3 + 2] = outputRGB[i * 3];     // R
+        }
+
+        video.write(frameBGR);
+    }
+
+    capture.release();
+    video.release();
+
+    std::cout << "\nMerging audio with FFmpeg...\n";
+
+    const double startTime = static_cast<double>(startFrame) / fps;
+    const double duration = static_cast<double>(framesToProcess) / fps;
+
+    std::string ffmpegCmd = "ffmpeg -i \"" + tempVideoPath + "\" -i \"" + inputVideoPath +
+                            "\" -ss " + std::to_string(startTime) +
+                            " -t " + std::to_string(duration) +
+                            " -c:v copy -c:a aac -map 0:v:0 -map 1:a:0? -y \"" +
+                            outputVideoPath + "\" 2>&1";
+
+    const int result = system(ffmpegCmd.c_str());
+
+    if (result == 0) {
+        std::remove(tempVideoPath.c_str());
+        std::cout << outputVideoPath << " successfully created with audio\n";
+    } else {
+        std::cerr << "Warning: FFmpeg failed. Video saved without audio: " << tempVideoPath << "\n";
     }
 }
 
-
-
-void edge_detector(
-	const Image& baseImage,
-	const std::string& baseName
-) {
-	Image img = baseImage;
-	img.grayscale_avg();
-	int img_size = img.w*img.h;
-
-	Image gray_img(img.w, img.h, 1);
-	//printf("Dimensions de gray_img : %d x %d, data=%p\n", gray_img.w, gray_img.h, gray_img.data);
-	if (gray_img.w <= 0 || gray_img.h <= 0 || gray_img.data == nullptr) {
-		fprintf(stderr, "Erreur : gray_img invalide !\n");
-		return;
-	}
-
-	for(uint64_t k=0; k<img_size; ++k) {
-		gray_img.data[k] = img.data[img.channels*k];
-	}
-
-	// blur
-	Image blur_img(img.w, img.h, 1);
-	constexpr double inv16 = 1.0 / 16.0;
-	double gauss[9] = {
-		inv16, 2*inv16, inv16,
-		2*inv16, 4*inv16, 2*inv16,
-		inv16, 2*inv16, inv16
-	};
-	/*
-	printf("Noyau (kernel) : [");
-	for (int i = 0; i < 9; ++i) printf("%.2f, ", gauss[i]);
-	printf("]\n");
-	*/
-	gray_img.convolve_linear(0, 3, 3, gauss, 1, 1);
-	for(uint64_t k=0; k<img_size; ++k) {
-		blur_img.data[k] = gray_img.data[k];
-	}
-	/*
-	outputPath = std::string(OUTPUT_FOLDER) + folderEdgeDetector + baseName + " blur.png";
-	blur_img.write(outputPath.c_str());
-	*/
-
-	// edge detection
-	auto tx = new double[img_size]();
-	auto ty = new double[img_size]();
-	auto gx = new double[img_size]();
-	auto gy = new double[img_size]();
-
-
-	//seperable convolution
-
-	// Première boucle : remplir tx/ty pour r ∈ [0, h-1]
-	for(uint32_t r=0; r<blur_img.h; ++r) {
-		for(uint32_t c=1; c<blur_img.w-1; ++c) {
-			tx[r*blur_img.w+c] = blur_img.data[r*blur_img.w+c+1] - blur_img.data[r*blur_img.w+c-1];
-			ty[r*blur_img.w+c] = 47*blur_img.data[r*blur_img.w+c+1] + 162*blur_img.data[r*blur_img.w+c] + 47*blur_img.data[r*blur_img.w+c-1];
-		}
-	}
-	for(uint32_t c=1; c<blur_img.w-1; ++c) {
-		for(uint32_t r=1; r<blur_img.h-1; ++r) {
-			gx[r*blur_img.w+c] = 47*tx[(r+1)*blur_img.w+c] + 162*tx[r*blur_img.w+c] + 47*tx[(r-1)*blur_img.w+c];
-			gy[r*blur_img.w+c] = ty[(r+1)*blur_img.w+c] - ty[(r-1)*blur_img.w+c];
-		}
-	}
-
-	delete[] tx;
-	delete[] ty;
-
-	//make test images
-	double mxx = -INFINITY,
-		mxy = -INFINITY,
-		mnx = INFINITY,
-		mny = INFINITY;
-	for(uint64_t k=0; k<img_size; ++k) {
-		mxx = fmax(mxx, gx[k]);
-		mxy = fmax(mxy, gy[k]);
-		mnx = fmin(mnx, gx[k]);
-		mny = fmin(mny, gy[k]);
-	}
-	Image Gx(img.w, img.h, 1);
-	Image Gy(img.w, img.h, 1);
-	for(uint64_t k=0; k<img_size; ++k) {
-		Gx.data[k] = static_cast<uint8_t>(255*(gx[k]-mnx)/(mxx-mnx));
-		Gy.data[k] = static_cast<uint8_t>(255*(gy[k]-mny)/(mxy-mny));
-	}
-
-	// fun part
-	double threshold = 0.09;
-	auto g = new double[img_size];
-	auto theta = new double[img_size];
-	double x, y;
-	for(uint64_t k=0; k<img_size; ++k) {
-		x = gx[k];
-		y = gy[k];
-		g[k] = sqrt(x*x + y*y);
-		theta[k] = atan2(y, x);
-	}
-
-
-	//make images
-	double mx = -INFINITY,
-		mn = INFINITY;
-	for(uint64_t k=0; k<img_size; ++k) {
-		mx = fmax(mx, g[k]);
-		mn = fmin(mn, g[k]);
-	}
-	Image G(img.w, img.h, 1);
-	Image GT(img.w, img.h, 3);
-
-	double h, s, l;
-	double v;
-	for(uint64_t k=0; k<img_size; ++k) {
-		//theta to determine hue
-		h = theta[k]*180./M_PI + 180.;
-
-		//v is the relative edge strength
-		if(mx == mn) {
-			v = 0;
-		}
-		else {
-			v = (g[k]-mn)/(mx-mn) > threshold ? (g[k]-mn)/(mx-mn) : 0;
-		}
-		s = l = v;
-
-		//hsl => rgb
-		double c = (1-abs(2*l-1))*s;
-		double x = c*(1-abs(fmod((h/60),2)-1));
-		double m = l-c/2;
-
-		double rt, gt, bt;
-		rt=bt=gt = 0;
-		if(h < 60) {
-			rt = c;
-			gt = x;
-		}
-		else if(h < 120) {
-			rt = x;
-			gt = c;
-		}
-		else if(h < 180) {
-			gt = c;
-			bt = x;
-		}
-		else if(h < 240) {
-			gt = x;
-			bt = c;
-		}
-		else if(h < 300) {
-			bt = c;
-			rt = x;
-		}
-		else {
-			bt = x;
-			rt = c;
-		}
-
-		uint8_t red, green, blue;
-		red = static_cast<uint8_t>(255*(rt+m));
-		green = static_cast<uint8_t>(255*(gt+m));
-		blue = static_cast<uint8_t>(255*(bt+m));
-
-		GT.data[k*3] = red;
-		GT.data[k*3+1] = green;
-		GT.data[k*3+2] = blue;
-
-		G.data[k] = static_cast<uint8_t>(255 * v);
-	}
-
-	std::string outputPath = std::string(FOLDER_EDGEDETECTOR) + baseName + " GT.png";
-	GT.write(outputPath.c_str());
-
-	delete[] gx;
-	delete[] gy;
-	delete[] g;
-	delete[] theta;
-}
-
-
-void processImageTransforms(
+void processVideoTransforms(
     const std::string& baseName,
     const std::string& inputPath,
-    const std::vector<int>& thresholdsAndStep,
-    const std::vector<float> &proportions,
+    const int fps,
+    const std::vector<float>& proportions,
     const std::vector<int>& colorNuances,
-    const int fraction,
-    std::vector<int>& rectanglesToModify,
-    const std::vector<int>& tolerance,
-    const bool severalColorsByThreshold,
-    const bool severalColorsByProportion,
-    const bool totalBlackAndWhite,
-    const bool totalReversal,
-    const bool partial,
-    const bool partialInDiagonal,
-    const bool alternatingBlackAndWhite,
-    const bool oneColor
+    const std::vector<int>& frames
 ) {
-
-	if (inputPath.length() >= 4 && [&]() {
-		const std::string ext = inputPath.substr(inputPath.length() - 4);
-		return ext == ".mp4" || ext == ".MP4";
-	}()) {
-		std::cout << "MP4 file detected, no transformation applied." << std::endl;
-		return;
-	}
-
-	std::cout << inputPath << std::endl;
-
-    const Image image(inputPath.c_str());
-
-    const int first_threshold = 3 * thresholdsAndStep[0];
-    const int last_threshold = 3 * thresholdsAndStep[1];
-    const int step = 3 * thresholdsAndStep[2];
-
-
-	/*
-	removeColors(image, baseName);
-	*/
-	edge_detector(image, baseName);
-
-
-    if (oneColor) {
-        oneColorTransformations(image, baseName, tolerance);
+    // Checking extension MP4
+    if (inputPath.length() >= 4 && [&]() {
+        const std::string ext = inputPath.substr(inputPath.length() - 4);
+        return ext == ".mp4" || ext == ".MP4";
+    }()) {
+        std::cout << "Fichier MP4 détecté → edge_detector_video" << std::endl;
+        edge_detector_video(baseName, inputPath, frames);
+    } else {
+        std::cout << "Fichier non-MP4 détecté → several_colors_transformations_streaming" << std::endl;
+        several_colors_transformations_streaming(baseName, inputPath, fps, proportions, colorNuances);
     }
-
-    if (severalColorsByThreshold) {
-        several_colors_transformations_by_threshold(image, baseName, first_threshold, last_threshold, step,
-            colorNuances);
-    }
-
-	if (severalColorsByProportion) {
-		several_colors_transformations_by_proportion(image, baseName,
-			proportions, colorNuances);
-	}
-
-    if (totalBlackAndWhite) {
-        applyAndSaveGenericTransformations(
-            image,
-            wrapSimpleTransforms(total_black_and_white_transformations),
-            total_black_and_white_output_dirs,
-            total_black_and_white_suffixes,
-            baseName,
-            " - ",
-            first_threshold,
-            last_threshold,
-            step,
-            true,
-            FOLDER_120,
-            {}
-        );
-    }
-
-    if (totalReversal) {
-        applyAndSaveGenericTransformations(
-            image,
-            wrapSimpleTransforms(total_reversal_step_by_step_transformations),
-            reversal_step_by_step_output_dirs,
-            reversal_step_by_step_suffixes,
-            baseName,
-            " - ",
-            first_threshold,
-            last_threshold,
-            step,
-            true,
-            FOLDER_120,
-            {}
-        );
-    }
-
-    if (alternatingBlackAndWhite) {
-        std::vector altParams = {first_threshold, last_threshold, step};
-        applyAndSaveGenericTransformations(
-            image,
-            wrapAlternatingTransforms(total_alternating_black_and_white_transformations),
-            total_step_by_step_output_dirs,
-            total_step_by_step_suffixes,
-            baseName,
-            " Alternating - ",
-            first_threshold,
-            last_threshold,
-            step,
-            true,
-            FOLDER_120,
-            altParams
-        );
-    }
-
-    if (partial) {
-        several_colors_partial_transformations(
-            image,
-            wrapPartialTransformsWithRectangles(partialTransformationsFunc),
-            baseName,
-            first_threshold,
-            last_threshold,
-            step,
-            fraction,
-            rectanglesToModify,
-            colorNuances
-        );
-    }
-
-    if (partialInDiagonal) {
-        std::vector<int> rectanglesInDiagonal = genererRectanglesInDiagonal(fraction);
-        several_colors_partial_transformations(
-            image,
-            wrapPartialTransformsWithRectangles(partialTransformationsFunc),
-            baseName,
-            first_threshold,
-            last_threshold,
-            step,
-            fraction,
-            rectanglesInDiagonal,
-            colorNuances
-        );
-    }
-
 }
-
