@@ -4,9 +4,6 @@
 #include <vector>
 #include <string>
 
-void createVideoFromImageList(const std::vector<std::string>& imagePaths, const std::string& outputVideoPath, int fps = 24);
-
-void several_colors_transformations_in_video(const std::vector<std::string>& imageFiles, const std::string& outputVideoPath, int fps = 24);
 
 void several_colors_transformations_streaming(
     const std::string& baseName,
@@ -15,5 +12,21 @@ void several_colors_transformations_streaming(
     const std::vector<float> &proportions,
     const std::vector<int>& colorNuances
 );
+
+void edge_detector_video(
+    const std::string& baseName,
+    const std::string& inputVideoPath,
+    const std::vector<int>& frames
+
+);
+
+void processVideoTransforms(
+    const std::string& baseName,
+    const std::string& inputPath,
+    int fps,
+    const std::vector<float>& proportions,
+    const std::vector<int>& colorNuances,
+    const std::vector<int>& frames
+    );
 
 #endif // VIDEOPROCESSING_H
