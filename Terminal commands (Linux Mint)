@@ -26,7 +26,7 @@ Compressing all MP4 videos whose name begins by "75".
 find . -maxdepth 1 -type f -name '75*.mp4'  -exec sh -c 'ffmpeg -y -i "$1" -c:v libx264 -crf 23 -c:a aac -b:a 128k "${1%.mp4}_compressed.mp4"' sh {} \;
 
 Getting the number of frames in the file "video"
-ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=nb_read_frames -of csv=p=0 "video.mp4"
+ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=nb_read_frames -of csv=p=0 video.mp4
 
 Getting the list of MP4 files, including subfolders
 find . -type f \( -iname "*.mp4" \) -printf "%P\n"
