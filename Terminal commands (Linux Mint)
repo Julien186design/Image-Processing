@@ -24,3 +24,6 @@ find . -maxdepth 1 -type f -name '*.png' -size +16M -exec pngcrush -ow {} \;
 
 Compressing all MP4 videos whose name begins by "75".
 find . -maxdepth 1 -type f -name '75*.mp4'  -exec sh -c 'ffmpeg -y -i "$1" -c:v libx264 -crf 23 -c:a aac -b:a 128k "${1%.mp4}_compressed.mp4"' sh {} \;
+
+Getting the number of frames in the file "video"
+ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=nb_read_frames -of csv=p=0 "video.mp4"
