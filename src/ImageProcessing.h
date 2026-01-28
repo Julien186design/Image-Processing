@@ -196,6 +196,30 @@ wrapTwoIntTransforms(const std::vector<TwoIntTransformationByThreshold>& transfo
     return wrapped;
 }
 
+struct WeightedColors {
+    uint8_t r_third, g_third, b_third;
+    uint8_t r_half, g_half, b_half;
+    uint8_t r_full, g_full, b_full;
+};
+
+inline WeightedColors calculateWeightedColors(
+    const float weightOfRed, const float weightOfGreen, const float weightOfBlue) {
+    return {
+        static_cast<uint8_t>(weightOfRed * SimpleColors::ONE_THIRD),
+        static_cast<uint8_t>(weightOfGreen * SimpleColors::ONE_THIRD),
+        static_cast<uint8_t>(weightOfBlue * SimpleColors::ONE_THIRD),
+
+        static_cast<uint8_t>(weightOfRed * SimpleColors::HALF),
+        static_cast<uint8_t>(weightOfGreen * SimpleColors::HALF),
+        static_cast<uint8_t>(weightOfBlue * SimpleColors::HALF),
+
+        static_cast<uint8_t>(weightOfRed * SimpleColors::FULL),
+        static_cast<uint8_t>(weightOfGreen * SimpleColors::FULL),
+        static_cast<uint8_t>(weightOfBlue * SimpleColors::FULL)
+    };
+}
+
+
 void processImageTransforms(
     const std::string& baseName ,
     const std::string& inputPath,
