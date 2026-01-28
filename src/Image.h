@@ -1,7 +1,7 @@
 #ifndef IMAGE_H
 #define IMAGE_H
 
-#include <stdint.h>
+#include <cstdint>
 #include <cstdio>
 #include <complex>
 #include <vector>
@@ -141,7 +141,10 @@ struct Image {
 	int tolerance);
 
 	Image& simplify_to_dominant_color_combinations_with_average(int tolerance);
-	Image& simplify_to_dominant_color_combinations_without_average(int tolerance);
+	Image& simplify_to_dominant_color_combinations_without_average(int tolerance,
+			uint8_t r_third, uint8_t g_third, uint8_t b_third,
+			uint8_t r_half, uint8_t g_half, uint8_t b_half,
+			uint8_t r_full, uint8_t g_full, uint8_t b_full);
 
 	template<typename ConditionFunc, typename TransformFunc>
 	Image& applyThresholdTransformationRegionFraction(
