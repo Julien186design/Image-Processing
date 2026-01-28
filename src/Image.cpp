@@ -46,9 +46,8 @@ Image::Image(const Image& img) : Image(img.w, img.h, img.channels) {
 
 Image::~Image() {
 	// stbi_image_free(data);
-	if (data != nullptr) {
-		delete[] data;
-	}
+	delete[] data;
+
 }
 
 bool Image::read(const char* filename, int channel_force) {
@@ -99,25 +98,26 @@ ImageType Image::get_file_type(const char* filename) {
 	return PNG;
 }
 
+
 Image& Image::below_threshold(const int threshold, const int cn, const bool useDarkNuance) {
 	const int newColor = useDarkNuance ? cn : 255 - cn;
 	for(size_t i = 0; i < size; i += static_cast<size_t>(channels)) {
-		const int rgb = (data[i] + data[i + 1] + data[i + 2]);
-		if (rgb < threshold) {
+		if ((data[i] + data[i + 1] + data[i + 2]) < threshold) {
 			data[i] = data[i + 1] = data[i + 2] = newColor;
 		}
 	}
+
 	return *this;
 }
 
 Image& Image::aboveThreshold(const int threshold, const int cn, const bool useDarkNuance) {
 	const int newColor = useDarkNuance ? cn : 255 - cn;
 	for(size_t i = 0; i < size; i += static_cast<size_t>(channels)) {
-		const int rgb = (data[i] + data[i + 1] + data[i + 2]);
-		if (rgb > threshold) {
+		if ((data[i] + data[i + 1] + data[i + 2]) > threshold) {
 			data[i] = data[i + 1] = data[i + 2] = newColor;
 		}
 	}
+
 	return *this;
 }
 
@@ -174,6 +174,289 @@ Image& Image::aboveProportion(const float proportion, const int cn, const bool u
     }
     return *this;
 }
+
+void Image::simplify_pixel(
+	uint8_t& r, uint8_t& g, uint8_t& b,
+	const uint8_t r_val_third, const uint8_t g_val_third, const uint8_t b_val_third,
+	const uint8_t r_val_half, const uint8_t g_val_half, const uint8_t b_val_half,
+	const uint8_t r_val_full, const uint8_t g_val_full, const uint8_t b_val_full,
+	const int tolerance
+) {
+	const bool r_eq_g = approx_equal(r, g, tolerance);
+	const bool r_eq_b = approx_equal(r, b, tolerance);
+	const bool g_eq_b = approx_equal(g, b, tolerance);
+
+	// Cas 1 : Tous les canaux sont égaux
+	if (r_eq_g && r_eq_b && g_eq_b) {
+		r = r_val_third;
+		g = g_val_third;
+		b = b_val_third;
+		return;
+	}
+
+	// Cas 2 : Deux canaux sont égaux
+	if (r_eq_g) {
+		r = r_val_half;
+		g = g_val_half;
+		b = 0;
+		return;
+	} else if (r_eq_b) {
+		r = r_val_half;
+		g = 0;
+		b = b_val_half;
+		return;
+	} else if (g_eq_b) {
+		r = 0;
+		g = g_val_half;
+		b = b_val_half;
+		return;
+	}
+
+	// Cas 3 : Tous les canaux sont distincts
+	const ChannelIndices indices = get_channel_indices(r, g, b);
+	const uint8_t avgs_full[] = {r_val_full, g_val_full, b_val_full};
+	const uint8_t avgs_half[] = {r_val_half, g_val_half, b_val_half};
+
+	uint8_t new_vals[3] = {0, 0, 0};
+	new_vals[indices.max] = avgs_full[indices.max];
+	new_vals[indices.mid] = avgs_half[indices.mid];
+	new_vals[indices.min] = 0;
+
+	r = new_vals[0];
+	g = new_vals[1];
+	b = new_vals[2];
+}
+
+Image& Image::simplify_to_dominant_color_combinations_with_average(const int tolerance) {
+	for (size_t i = 0; i < size; i += channels) {
+		uint8_t& r = data[i];
+		uint8_t& g = data[i + 1];
+		uint8_t& b = data[i + 2];
+
+		const uint8_t r_third = avg_u8_round(r, SimpleColors::ONE_THIRD);
+		const uint8_t g_third = avg_u8_round(g, SimpleColors::ONE_THIRD);
+		const uint8_t b_third = avg_u8_round(b, SimpleColors::ONE_THIRD);
+
+		const uint8_t r_half = avg_u8_round(r, SimpleColors::HALF);
+		const uint8_t g_half = avg_u8_round(g, SimpleColors::HALF);
+		const uint8_t b_half = avg_u8_round(b, SimpleColors::HALF);
+
+		const uint8_t r_full = avg_u8_round(r, SimpleColors::FULL);
+		const uint8_t g_full = avg_u8_round(g, SimpleColors::FULL);
+		const uint8_t b_full = avg_u8_round(b, SimpleColors::FULL);
+
+		simplify_pixel(
+			r, g, b,
+			r_third, g_third, b_third,
+			r_half, g_half, b_half,
+			r_full, g_full, b_full,
+			tolerance
+		);
+	}
+	return *this;
+}
+
+Image& Image::simplify_to_dominant_color_combinations_without_average(
+			const int tolerance,
+			const uint8_t r_third, const uint8_t g_third, const uint8_t b_third,
+			const uint8_t r_half, const uint8_t g_half, const uint8_t b_half,
+			const uint8_t r_full, const uint8_t g_full, const uint8_t b_full
+		) {
+
+	for (size_t i = 0; i < size; i += channels) {
+		uint8_t& r = data[i];
+		uint8_t& g = data[i + 1];
+		uint8_t& b = data[i + 2];
+
+		simplify_pixel(
+			r, g, b,
+			r_third, g_third, b_third,
+			r_half, g_half, b_half,
+			r_full, g_full, b_full,
+			tolerance
+		);
+	}
+	return *this;
+}
+
+Image& Image::reverseAboveThreshold(const int threshold) {
+	for(size_t i = 0; i < size; i += channels) {
+		const int rgb = (data[i] + data[i + 1] + data[i + 2]);
+		if (rgb < threshold) {
+			data[i] = 255 - data[i];
+			data[i + 1] = 255 - data[i + 1];
+			data[i + 2] = 255 - data[i + 2];
+		}
+	}
+	return *this;
+}
+
+Image& Image::reverseBelowThreshold(const int threshold) {
+	for(size_t i = 0; i < size; i+=channels) {
+		int rgb = (data[i] + data[i+1] + data[i+2]);
+		if (rgb > threshold) {
+			data[i] = 255 - data[i];
+			data[i + 1] = 255 - data[i + 1];
+			data[i + 2] = 255 - data[i + 2];
+		}
+	}
+	return *this;
+}
+
+Image& Image::original_black_and_white(const int threshold) {
+	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
+		int rgb = (data[i] + data[i+1] + data[i+2]);
+		if (rgb > threshold) {
+			data[i] = data[i + 1] = data[i + 2] = 255;
+		} else {
+			data[i] = data[i + 1] = data[i + 2] = 0;
+		}
+	}
+	return *this;
+}
+
+Image& Image::reversed_black_and_white(const int threshold) {
+	for (size_t i = 0; i < size; i += channels) {
+
+		const int rgb = data[i] + data[i + 1] + data[i + 2];
+
+		const uint8_t value = (rgb < threshold) ? 255 : 0;
+
+		data[i] = data[i + 1] = data[i + 2] = value;
+	}
+	return *this;
+}
+
+// in construction
+Image& Image::alternatelyDarkenAndWhitenBelowTheThreshold(int s, int first_threshold,	int last_threshold) {
+	const int threshold3 = 3 * s;
+	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
+		int rgb = (data[i] + data[i+1] + data[i+2]);
+		if (rgb < threshold3) {
+			data[i] = data[i + 1] = data[i + 2] = 0;
+		}
+	}
+	return *this;
+}
+
+Image& Image::alternatelyDarkenAndWhitenAboveTheThreshold(int s, int first_threshold,	int last_threshold) {
+	const int threshold3 = 3 * s;
+	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
+		int rgb = (data[i] + data[i+1] + data[i+2]);
+		if (rgb > threshold3) {
+			data[i] = data[i + 1] = data[i + 2] = 0;
+		}
+	}
+	return *this;
+}
+
+
+//fraction by rectangles
+
+template<typename ConditionFunc, typename TransformFunc>
+Image& Image::applyThresholdTransformationRegionFraction(
+	int threshold,
+	const int fraction,
+	const std::vector<int>& rectanglesToModify,
+	ConditionFunc condition,
+	TransformFunc transformation
+) {
+	if (rectanglesToModify.empty()) return *this;
+
+	const int numRectanglesPerRow = 1 << fraction;
+	const int totalRectangles = numRectanglesPerRow * numRectanglesPerRow;
+	const int rectWidth = w / numRectanglesPerRow;
+	const int rectHeight = h / numRectanglesPerRow;
+	const uint8_t transformValue = transformation();
+
+	for (const int rectIndex : rectanglesToModify) {
+		if (rectIndex < 0 || rectIndex >= totalRectangles) continue;
+
+		const int rectRow = rectIndex / numRectanglesPerRow;
+		const int rectCol = rectIndex % numRectanglesPerRow;
+		const int startX = rectCol * rectWidth;
+		const int startY = rectRow * rectHeight;
+		const int endX = std::min((rectCol + 1) * rectWidth, w);
+		const int endY = std::min((rectRow + 1) * rectHeight, h);
+
+		for (int y = startY; y < endY; ++y) {
+			const size_t rowOffset = y * w * channels;
+			for (int x = startX; x < endX; ++x) {
+				const size_t i = rowOffset + x * channels;
+				const int rgb = data[i] + data[i + 1] + data[i + 2];
+
+				if (condition(rgb)) {
+					data[i] = data[i + 1] = data[i + 2] = transformValue;
+				}
+			}
+		}
+	}
+	return *this;
+}
+
+Image& Image::darkenBelowThresholdRegionFraction(
+	int threshold,
+	int cn,
+	const int fraction,
+	const std::vector<int>& rectanglesToModify) {
+
+	return applyThresholdTransformationRegionFraction(
+	   threshold,
+	   fraction,
+	   rectanglesToModify,
+	   [threshold](const int rgb) { return rgb < threshold; },
+	   [cn]() -> uint8_t { return cn; }
+	);
+}
+
+Image& Image::whitenBelowThresholdRegionFraction(
+	int threshold,
+	const int cn,
+	const int fraction,
+	const std::vector<int>& rectanglesToModify) {
+
+	const int newColor = 255 - cn;
+
+		return applyThresholdTransformationRegionFraction(
+		   threshold,
+		   fraction,
+		   rectanglesToModify,
+		   [threshold](const int rgb) { return rgb < threshold; },
+		   [newColor]() -> uint8_t { return newColor; }
+		);
+	}
+
+Image& Image::darkenAboveThresholdRegionFraction(
+	int threshold,
+	const int cn,
+	const int fraction,
+	const std::vector<int>& rectanglesToModify) {
+
+	return applyThresholdTransformationRegionFraction(
+	   threshold,
+	   fraction,
+	   rectanglesToModify,
+	   [threshold](const int rgb) { return rgb > threshold; },
+	   [cn]() -> uint8_t { return cn; }
+	);
+}
+
+Image& Image::whitenAboveThresholdRegionFraction(
+	int threshold,
+	const int cn,
+	const int fraction,
+	const std::vector<int>& rectanglesToModify) {
+
+	const int newColor = 255 - cn;
+
+		return applyThresholdTransformationRegionFraction(
+		   threshold,
+		   fraction,
+		   rectanglesToModify,
+		   [threshold](const int rgb) { return rgb > threshold; },
+		   [newColor]() -> uint8_t { return newColor; }
+		);
+	}
 
 Image& Image::darkenBelowThreshold_ColorNuance_AVX2(const int threshold, const std::uint8_t cn)
 {
@@ -611,293 +894,13 @@ Image& Image::whitenAboveThreshold_ColorNuance_AVX2(const int threshold, const s
     return *this;
 }
 
-Image& Image::reverseAboveThreshold(const int threshold) {
-	for(size_t i = 0; i < size; i += channels) {
-		const int rgb = (data[i] + data[i + 1] + data[i + 2]);
-		if (rgb < threshold) {
-			data[i] = 255 - data[i];
-			data[i + 1] = 255 - data[i + 1];
-			data[i + 2] = 255 - data[i + 2];
-		}
-	}
-	return *this;
-}
-
-Image& Image::reverseBelowThreshold(const int threshold) {
-	for(size_t i = 0; i < size; i+=channels) {
-		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb > threshold) {
-			data[i] = 255 - data[i];
-			data[i + 1] = 255 - data[i + 1];
-			data[i + 2] = 255 - data[i + 2];
-		}
-	}
-	return *this;
-}
-
-Image& Image::original_black_and_white(const int threshold) {
-	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
-		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb > threshold) {
-			data[i] = data[i + 1] = data[i + 2] = 255;
-		} else {
-			data[i] = data[i + 1] = data[i + 2] = 0;
-		}
-	}
-	return *this;
-}
-
-Image& Image::reversed_black_and_white(const int threshold) {
-	for (size_t i = 0; i < size; i += channels) {
-
-		const int rgb = data[i] + data[i + 1] + data[i + 2];
-
-		const uint8_t value = (rgb < threshold) ? 255 : 0;
-
-		data[i] = data[i + 1] = data[i + 2] = value;
-	}
-	return *this;
-}
-
-// in construction
-Image& Image::alternatelyDarkenAndWhitenBelowTheThreshold(int s, int first_threshold,	int last_threshold) {
-	const int threshold3 = 3 * s;
-	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
-		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb < threshold3) {
-			data[i] = data[i + 1] = data[i + 2] = 0;
-		}
-	}
-	return *this;
-}
-
-Image& Image::alternatelyDarkenAndWhitenAboveTheThreshold(int s, int first_threshold,	int last_threshold) {
-	const int threshold3 = 3 * s;
-	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
-		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb > threshold3) {
-			data[i] = data[i + 1] = data[i + 2] = 0;
-		}
-	}
-	return *this;
-}
-
-
-void Image::simplify_pixel(
-	uint8_t& r, uint8_t& g, uint8_t& b,
-	const uint8_t r_val_third, const uint8_t g_val_third, const uint8_t b_val_third,
-	const uint8_t r_val_half, const uint8_t g_val_half, const uint8_t b_val_half,
-	const uint8_t r_val_full, const uint8_t g_val_full, const uint8_t b_val_full,
-	const int tolerance
-) {
-	const bool r_eq_g = approx_equal(r, g, tolerance);
-	const bool r_eq_b = approx_equal(r, b, tolerance);
-	const bool g_eq_b = approx_equal(g, b, tolerance);
-
-	// Cas 1 : Tous les canaux sont égaux
-	if (r_eq_g && r_eq_b && g_eq_b) {
-		r = r_val_third;
-		g = g_val_third;
-		b = b_val_third;
-		return;
-	}
-
-	// Cas 2 : Deux canaux sont égaux
-	if (r_eq_g) {
-		r = r_val_half;
-		g = g_val_half;
-		b = 0;
-		return;
-	} else if (r_eq_b) {
-		r = r_val_half;
-		g = 0;
-		b = b_val_half;
-		return;
-	} else if (g_eq_b) {
-		r = 0;
-		g = g_val_half;
-		b = b_val_half;
-		return;
-	}
-
-	// Cas 3 : Tous les canaux sont distincts
-	const ChannelIndices indices = get_channel_indices(r, g, b);
-	const uint8_t avgs_full[] = {r_val_full, g_val_full, b_val_full};
-	const uint8_t avgs_half[] = {r_val_half, g_val_half, b_val_half};
-
-	uint8_t new_vals[3] = {0, 0, 0};
-	new_vals[indices.max] = avgs_full[indices.max];
-	new_vals[indices.mid] = avgs_half[indices.mid];
-	new_vals[indices.min] = 0;
-
-	r = new_vals[0];
-	g = new_vals[1];
-	b = new_vals[2];
-}
-
-Image& Image::simplify_to_dominant_color_combinations_with_average(const int tolerance) {
-	for (size_t i = 0; i < size; i += channels) {
-		uint8_t& r = data[i];
-		uint8_t& g = data[i + 1];
-		uint8_t& b = data[i + 2];
-
-		const uint8_t r_third = avg_u8_round(r, SimpleColors::ONE_THIRD);
-		const uint8_t g_third = avg_u8_round(g, SimpleColors::ONE_THIRD);
-		const uint8_t b_third = avg_u8_round(b, SimpleColors::ONE_THIRD);
-
-		const uint8_t r_half = avg_u8_round(r, SimpleColors::HALF);
-		const uint8_t g_half = avg_u8_round(g, SimpleColors::HALF);
-		const uint8_t b_half = avg_u8_round(b, SimpleColors::HALF);
-
-		const uint8_t r_full = avg_u8_round(r, SimpleColors::FULL);
-		const uint8_t g_full = avg_u8_round(g, SimpleColors::FULL);
-		const uint8_t b_full = avg_u8_round(b, SimpleColors::FULL);
-
-		simplify_pixel(
-			r, g, b,
-			r_third, g_third, b_third,
-			r_half, g_half, b_half,
-			r_full, g_full, b_full,
-			tolerance
-		);
-	}
-	return *this;
-}
-
-Image& Image::simplify_to_dominant_color_combinations_without_average(const int tolerance) {
-	for (size_t i = 0; i < size; i += channels) {
-		uint8_t& r = data[i];
-		uint8_t& g = data[i + 1];
-		uint8_t& b = data[i + 2];
-
-		simplify_pixel(
-			r, g, b,
-			SimpleColors::ONE_THIRD, SimpleColors::ONE_THIRD, SimpleColors::ONE_THIRD,
-			SimpleColors::HALF, SimpleColors::HALF, SimpleColors::HALF,
-			SimpleColors::FULL, SimpleColors::FULL, SimpleColors::FULL,
-			tolerance
-		);
-	}
-	return *this;
-}
-
-
-//fraction by rectangles
-
-template<typename ConditionFunc, typename TransformFunc>
-Image& Image::applyThresholdTransformationRegionFraction(
-	int threshold,
-	const int fraction,
-	const std::vector<int>& rectanglesToModify,
-	ConditionFunc condition,
-	TransformFunc transformation
-) {
-	if (rectanglesToModify.empty()) return *this;
-
-	const int numRectanglesPerRow = 1 << fraction;
-	const int totalRectangles = numRectanglesPerRow * numRectanglesPerRow;
-	const int rectWidth = w / numRectanglesPerRow;
-	const int rectHeight = h / numRectanglesPerRow;
-	const uint8_t transformValue = transformation();
-
-	for (const int rectIndex : rectanglesToModify) {
-		if (rectIndex < 0 || rectIndex >= totalRectangles) continue;
-
-		const int rectRow = rectIndex / numRectanglesPerRow;
-		const int rectCol = rectIndex % numRectanglesPerRow;
-		const int startX = rectCol * rectWidth;
-		const int startY = rectRow * rectHeight;
-		const int endX = std::min((rectCol + 1) * rectWidth, w);
-		const int endY = std::min((rectRow + 1) * rectHeight, h);
-
-		for (int y = startY; y < endY; ++y) {
-			const size_t rowOffset = y * w * channels;
-			for (int x = startX; x < endX; ++x) {
-				const size_t i = rowOffset + x * channels;
-				const int rgb = data[i] + data[i + 1] + data[i + 2];
-
-				if (condition(rgb)) {
-					data[i] = data[i + 1] = data[i + 2] = transformValue;
-				}
-			}
-		}
-	}
-	return *this;
-}
-
-Image& Image::darkenBelowThresholdRegionFraction(
-	int threshold,
-	int cn,
-	const int fraction,
-	const std::vector<int>& rectanglesToModify) {
-
-	return applyThresholdTransformationRegionFraction(
-	   threshold,
-	   fraction,
-	   rectanglesToModify,
-	   [threshold](const int rgb) { return rgb < threshold; },
-	   [cn]() -> uint8_t { return cn; }
-	);
-}
-
-Image& Image::whitenBelowThresholdRegionFraction(
-	int threshold,
-	const int cn,
-	const int fraction,
-	const std::vector<int>& rectanglesToModify) {
-
-	const int newColor = 255 - cn;
-
-		return applyThresholdTransformationRegionFraction(
-		   threshold,
-		   fraction,
-		   rectanglesToModify,
-		   [threshold](const int rgb) { return rgb < threshold; },
-		   [newColor]() -> uint8_t { return newColor; }
-		);
-	}
-
-Image& Image::darkenAboveThresholdRegionFraction(
-	int threshold,
-	const int cn,
-	const int fraction,
-	const std::vector<int>& rectanglesToModify) {
-
-	return applyThresholdTransformationRegionFraction(
-	   threshold,
-	   fraction,
-	   rectanglesToModify,
-	   [threshold](const int rgb) { return rgb > threshold; },
-	   [cn]() -> uint8_t { return cn; }
-	);
-}
-
-Image& Image::whitenAboveThresholdRegionFraction(
-	int threshold,
-	int cn,
-	int fraction,
-	const std::vector<int>& rectanglesToModify) {
-
-	const int newColor = 255 - cn;
-
-		return applyThresholdTransformationRegionFraction(
-		   threshold,
-		   fraction,
-		   rectanglesToModify,
-		   [threshold](int rgb) { return rgb > threshold; },
-		   [newColor]() -> uint8_t { return newColor; }
-		);
-	}
-
 Image& Image::operator=(const Image& img) {
 	if (this == &img) {
 		return *this;  // Protection auto-affectation
 	}
 
 	// Libération de l'ancien buffer
-	if (data != nullptr) {
-		delete[] data;
-	}
+	delete[] data;
 
 	// Copie des nouvelles dimensions
 	w = img.w;
@@ -933,8 +936,8 @@ Image& Image::std_convolve_clamp_to_0(const int channel, const int ker_w, const 
     memset(new_data, 0, w * h);
 
     // Calcul de la convolution
-    int half_ker_w = ker_w / 2;
-    int half_ker_h = ker_h / 2;
+    const int half_ker_w = ker_w / 2;
+    const int half_ker_h = ker_h / 2;
 
     for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
@@ -943,8 +946,8 @@ Image& Image::std_convolve_clamp_to_0(const int channel, const int ker_w, const 
             // Application du noyau de convolution
             for (int ky = -half_ker_h; ky <= half_ker_h; ++ky) {
                 for (int kx = -half_ker_w; kx <= half_ker_w; ++kx) {
-                    int pixel_x = x + kx;
-                    int pixel_y = y + ky;
+                    const int pixel_x = x + kx;
+                    const int pixel_y = y + ky;
 
                     // Gestion des bords : clamp to 0
                     if (pixel_x < 0 || pixel_x >= w || pixel_y < 0 || pixel_y >= h) {
@@ -952,16 +955,16 @@ Image& Image::std_convolve_clamp_to_0(const int channel, const int ker_w, const 
                     }
 
                     // Calcul de l'indice du pixel
-                    int idx = pixel_y * w + pixel_x;
+                    const int idx = pixel_y * w + pixel_x;
 
                     // Calcul de la contribution du pixel au résultat
-                    int ker_idx = (ky + half_ker_h) * ker_w + (kx + half_ker_w);
+                    const int ker_idx = (ky + half_ker_h) * ker_w + (kx + half_ker_w);
                     sum += data[channels * idx + channel] * ker[ker_idx];
                 }
             }
 
             // Stockage du résultat dans new_data
-            int idx = y * w + x;
+            const int idx = y * w + x;
             new_data[idx] = static_cast<uint8_t>(sum);
         }
     }
@@ -980,7 +983,8 @@ Image& Image::std_convolve_clamp_to_0(const int channel, const int ker_w, const 
 
 
 
-Image& Image::std_convolve_clamp_to_border(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc) {
+Image& Image::std_convolve_clamp_to_border(const uint8_t channel, const uint32_t ker_w,
+	const uint32_t ker_h, double ker[], const uint32_t cr, const uint32_t cc) {
 	uint8_t new_data[w*h];
 	const uint64_t center = cr*ker_w + cc;
 	for(uint64_t k=channel; k<size; k+=channels) {
@@ -1159,7 +1163,7 @@ void Image::dft_2D(uint32_t m, uint32_t n, std::complex<double> x[], std::comple
 
 void Image::idft_2D(uint32_t m, uint32_t n, std::complex<double> X[], std::complex<double>* x) {
 	//X in column-major & bit-reversed (in rows then columns)
-	std::complex<double>* intermediate = new std::complex<double>[m*n];
+	auto* intermediate = new std::complex<double>[m*n];
 	//cols
 	for(uint32_t j=0; j<n; ++j) {
 		ifft(m, X+j*m, intermediate+j*m);
@@ -1175,10 +1179,10 @@ void Image::idft_2D(uint32_t m, uint32_t n, std::complex<double> X[], std::compl
 	//x in row-major & standard order
 }
 
-void Image::pad_kernel(uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc, uint32_t pw, uint32_t ph, std::complex<double>* pad_ker) {
+void Image::pad_kernel(const uint32_t ker_w, const uint32_t ker_h, double ker[], const uint32_t cr, const uint32_t cc, const uint32_t pw, const uint32_t ph, std::complex<double>* pad_ker) {
 	//padded so center of kernel is at top left
 	for(long i=-(static_cast<long>(cr)); i<static_cast<long>(ker_h)-cr; ++i) {
-		uint32_t r = (i<0) ? i+ph : i;
+		const uint32_t r = (i<0) ? i+ph : i;
 		for(long j=-(static_cast<long>(cc)); j<static_cast<long>(ker_w)-cc; ++j) {
 			uint32_t c = (j<0) ? j+pw : j;
 			pad_ker[r*pw+c] = std::complex<double>(ker[(i+cr)*ker_w+(j+cc)], 0);
@@ -1203,7 +1207,7 @@ Image& Image::fd_convolve_clamp_to_0(uint8_t channel, uint32_t ker_w, uint32_t k
 	uint64_t psize = static_cast<uint64_t>(pw) * static_cast<uint64_t>(ph);
 
 	//pad image
-	std::complex<double>* pad_img = new std::complex<double>[psize];
+	auto* pad_img = new std::complex<double>[psize];
 	for(uint32_t i=0; i<h; ++i) {
 		for(uint32_t j=0; j<w; ++j) {
 			pad_img[i*pw+j] = std::complex<double>(data[(i*w+j)*channels+channel],0);
@@ -1211,7 +1215,7 @@ Image& Image::fd_convolve_clamp_to_0(uint8_t channel, uint32_t ker_w, uint32_t k
 	}
 
 	//pad kernel
-	std::complex<double>* pad_ker = new std::complex<double>[psize];
+	auto* pad_ker = new std::complex<double>[psize];
 	pad_kernel(ker_w, ker_h, ker, cr, cc, pw, ph, pad_ker);
 
 	//convolution
@@ -1236,7 +1240,7 @@ Image& Image::fd_convolve_clamp_to_border(uint8_t channel, uint32_t ker_w, uint3
 	uint64_t psize = pw*ph;
 
 	//pad image
-	std::complex<double>* pad_img = new std::complex<double>[psize];
+	auto* pad_img = new std::complex<double>[psize];
 	for(uint32_t i=0; i<ph; ++i) {
 		uint32_t r = (i<h) ? i : ((i<h+cr ? h-1 : 0));
 		for(uint32_t j=0; j<pw; ++j) {
@@ -1246,7 +1250,7 @@ Image& Image::fd_convolve_clamp_to_border(uint8_t channel, uint32_t ker_w, uint3
 	}
 
 	//pad kernel
-	std::complex<double>* pad_ker = new std::complex<double>[psize];
+	auto* pad_ker = new std::complex<double>[psize];
 	pad_kernel(ker_w, ker_h, ker, cr, cc, pw, ph, pad_ker);
 
 	//convolution
@@ -1274,7 +1278,7 @@ Image& Image::fd_convolve_cyclic(const uint8_t channel, const uint32_t ker_w,
 	uint64_t psize = pw*ph;
 
 	//pad image
-	std::complex<double>* pad_img = new std::complex<double>[psize];
+	auto* pad_img = new std::complex<double>[psize];
 	for(uint32_t i=0; i<ph; ++i) {
 		uint32_t r = (i<h) ? i : ((i<h+cr ? i%h : h-ph+i));
 		for(uint32_t j=0; j<pw; ++j) {
@@ -1284,7 +1288,7 @@ Image& Image::fd_convolve_cyclic(const uint8_t channel, const uint32_t ker_w,
 	}
 
 	//pad kernel
-	std::complex<double>* pad_ker = new std::complex<double>[psize];
+	auto* pad_ker = new std::complex<double>[psize];
 	pad_kernel(ker_w, ker_h, ker, cr, cc, pw, ph, pad_ker);
 
 	//convolution
@@ -1321,7 +1325,7 @@ Image& Image::convolve_clamp_to_border(const uint8_t channel, const uint32_t ker
 		return std_convolve_clamp_to_border(channel, ker_w, ker_h, ker, cr, cc);
 	}
 }
-Image& Image::convolve_cyclic(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc) {
+Image& Image::convolve_cyclic(const uint8_t channel, const  uint32_t ker_w, const uint32_t ker_h, double ker[], const uint32_t cr, const uint32_t cc) {
 	if(ker_w*ker_h > 224) {
 		return fd_convolve_cyclic(channel, ker_w, ker_h, ker, cr, cc);
 	} else {
@@ -1382,12 +1386,14 @@ Image& Image::grayscale_avg() {
 	return *this;
 }
 
+
 Image& Image::grayscale_lum() {
 	if(channels < 3) {
 		printf("Image %p has less than 3 channels, it is assumed to already be grayscale.", this);
 	} else {
 		for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
-			const int gray = 0.2126*data[i] + 0.7152*data[i+1] + 0.0722*data[i+2];
+			const double gray_d = 0.2126*data[i] + 0.7152*data[i+1] + 0.0722*data[i+2];
+			const int gray = static_cast<int>(std::round(gray_d));
 			memset(data+i, gray, 3);
 		}
 	}
@@ -1408,8 +1414,6 @@ Image& Image::color_mask(const float r, const float g, const float b) {
 }
 
 
-
-
 Image& Image::encodeMessage(const char* message) {
 	const uint32_t len = strlen(message) * 8;
 	if(len + STEG_HEADER_SIZE > size) {
@@ -1417,7 +1421,7 @@ Image& Image::encodeMessage(const char* message) {
 		return *this;
 	}
 
-	for(uint8_t i = 0; i < STEG_HEADER_SIZE; ++i) {
+	for(size_t i = 0; i < STEG_HEADER_SIZE; ++i) {
 		data[i] &= 0xFE;
 		data[i] |= (len >> (STEG_HEADER_SIZE - 1 - i)) & 1UL;
 	}
@@ -1431,7 +1435,7 @@ Image& Image::encodeMessage(const char* message) {
 }
 
 Image& Image::decodeMessage(char* buffer, size_t* messageLength) {
-	uint32_t len = 0;
+	constexpr uint32_t len = 0;
 	for(size_t i = 0; i < STEG_HEADER_SIZE; ++i) {
 		data[i] &= 0xFE;
 		data[i] |= (len >> (STEG_HEADER_SIZE - 1 - i)) & 1UL;
@@ -1440,7 +1444,7 @@ Image& Image::decodeMessage(char* buffer, size_t* messageLength) {
 	*messageLength = len / 8;
 
 	for(uint32_t i = 0; i < len; ++i) {
-		buffer[i/8] = (buffer[i/8] << 1) | (data[i+STEG_HEADER_SIZE] & 1);
+		buffer[i/8] = static_cast<char>((buffer[i/8] << 1) | (data[i+STEG_HEADER_SIZE] & 1));
 	}
 
 
@@ -1496,8 +1500,8 @@ Image& Image::overlay(const Image& source, const int x, const int y) {
 			uint8_t* srcPx = &source.data[(sx + sy * source.w) * source.channels];
 			uint8_t* dstPx = &data[(sx + x + (sy + y) * w) * channels];
 
-			float srcAlpha = (source.channels < 4) ? 1.0f : (static_cast<float>(srcPx[3]) / 255.0f);
-			float dstAlpha = (channels < 4) ? 1.0f : (static_cast<float>(dstPx[3]) / 255.0f);
+			const float srcAlpha = (source.channels < 4) ? 1.0f : (static_cast<float>(srcPx[3]) / 255.0f);
+			const float dstAlpha = (channels < 4) ? 1.0f : (static_cast<float>(dstPx[3]) / 255.0f);
 
 
 			if (srcAlpha > 0.99f && dstAlpha > 0.99f) {
@@ -1529,7 +1533,7 @@ Image& Image::overlay(const Image& source, const int x, const int y) {
 }
 
 
-Image& Image::crop(uint16_t cx, uint16_t cy, uint16_t cw, uint16_t ch) {
+Image& Image::crop(const uint16_t cx, const uint16_t cy, const uint16_t cw, const uint16_t ch) {
 	size = cw * ch * channels;
 	auto* croppedImage = new uint8_t[size];
 	memset(croppedImage, 0, size);
@@ -1560,15 +1564,15 @@ Image& Image::crop(uint16_t cx, uint16_t cy, uint16_t cw, uint16_t ch) {
 
 
 
-Image& Image::resizeNN(uint16_t nw, uint16_t nh) {
+Image& Image::resizeNN(const uint16_t nw, const uint16_t nh) {
 	size = nw * nh * channels;
-	uint8_t* newImage = new uint8_t[size];
+	auto* newImage = new uint8_t[size];
 
 	const float scaleX = static_cast<float>(nw) / static_cast<float>(w);
 	const float scaleY = static_cast<float>(nh) / static_cast<float>(h);
 
 	for(uint16_t y = 0; y < nh; ++y) {
-		const uint16_t sy = static_cast<uint16_t>(std::round(y / scaleY));
+		const auto sy = static_cast<uint16_t>(std::round(y / scaleY));
 		for(uint16_t x = 0; x < nw; ++x) {
 			const auto sx = static_cast<uint16_t>(std::round(x / scaleX));
 
