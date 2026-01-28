@@ -5,6 +5,7 @@
 #include <iostream>
 
 int main() {
+	omp_set_num_threads(3); // limit the number of threads used
 	#pragma omp parallel
 	{
 		std::cout << "Thread " << omp_get_thread_num() << " sur " << omp_get_num_threads() << std::endl;
@@ -13,12 +14,13 @@ int main() {
 	const std::string inputFile = "Food/Oreo Cake.jpg";
 	
 	const std::vector<int> thresholdsAndStep = {60, 180, 30}; // {first threshold, last threshold, step}
-	const std::vector<float> proportions = {0, 1, 0.1};
+	const std::vector<float> proportions = {0, 1, 0.03125};
 	const std::vector<int> colorNuances = {0, 120, 10}; // {first color, last color, step}
+	const std::vector<int> frames = {0, 0};
 	constexpr int fps = 25;
 	constexpr int fraction = 2;
 	std::vector<int> rectanglesToModify = range_to_vector({8, 15});
-	const std::vector toleranceOneColor = {0, 20, 1};
+	const std::vector toleranceOneColor = {0, 5, 1};
 	constexpr bool severalColorsByThreshold = false;
 	constexpr bool severalColorsByProportion = false;
 	constexpr bool oneColor = false;
@@ -34,10 +36,7 @@ int main() {
 		rectanglesToModify,	toleranceOneColor, severalColorsByThreshold, severalColorsByProportion,
 		totalBlackAndWhite, totalReversal, partial, partialInDiagonal, alternatingBlackAndWhite, oneColor);
 
-	
-	std::cout << inputPath << std::endl;
-
-	several_colors_transformations_streaming(baseName, inputPath,  fps, proportions, colorNuances);
+	processVideoTransforms(baseName, inputPath, fps, proportions, colorNuances, frames);
 
 	const auto end = std::chrono::high_resolution_clock::now();
 	const auto duration = std::chrono::duration_cast<std::chrono::seconds>(end - start);
