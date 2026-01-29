@@ -1,16 +1,16 @@
 #include "ImageProcessing.h"
-
+#include "VideoProcessing.h"
 #include <chrono>
 #include <omp.h>
 #include <iostream>
 
 int main() {
-	omp_set_num_threads(3); // limit the number of threads used
+	// omp_set_num_threads(3);
 	#pragma omp parallel
 	{
 		std::cout << "Thread " << omp_get_thread_num() << " sur " << omp_get_num_threads() << std::endl;
 	}
-	auto start = std::chrono::high_resolution_clock::now();
+	const auto start = std::chrono::high_resolution_clock::now();
 	const std::string inputFile = "Food/Oreo Cake.jpg";
 	
 	const std::vector<int> thresholdsAndStep = {60, 180, 30}; // {first threshold, last threshold, step}
