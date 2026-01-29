@@ -7,6 +7,8 @@
 #include <string>
 #include <iostream>
 #include <fstream>
+#include <sstream>
+#include <iomanip>
 
 
 void several_colors_transformations_streaming(
@@ -157,10 +159,12 @@ void edge_detector_video(
     const int totalFrames = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_COUNT));
     std::cout << "totalFrames " << totalFrames << std::endl;
     const double sourceFps = capture.get(cv::CAP_PROP_FPS);
-    const int fps = static_cast<int>(sourceFps);
+    const double fps = capture.get(cv::CAP_PROP_FPS);
 
     const int startFrame = std::max(0, frames[0]);
-    const int endFrame = (frames[1] <= 0 || frames[1] > totalFrames) ? totalFrames : frames[1];
+    const int endFrame   = (frames[1] <= 0 || frames[1] > totalFrames)
+                         ? totalFrames
+                         : frames[1];
     const int framesToProcess = endFrame - startFrame;
 
     if (framesToProcess <= 0) {
@@ -169,14 +173,6 @@ void edge_detector_video(
     }
 
     const std::string tempVideoPath = std::string(FOLDER_VIDEOS) + baseName + "_temp.mp4";
-    std::string outputVideoPath = std::string(FOLDER_VIDEOS) + baseName +
-        " - Edge Detector - " + std::to_string(framesToProcess) + " frames ";
-    if (framesToProcess == totalFrames) {
-        outputVideoPath += "- "  +  std::to_string(fps) + " fps.mp4";
-    } else {
-        outputVideoPath += "{" + std::to_string(frames[0]) + "-" + std::to_string(frames[1]) + "} " +
-            std::to_string(fps) + " fps.mp4";
-    }
 
     cv::VideoWriter video(tempVideoPath,
         cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
@@ -189,29 +185,14 @@ void edge_detector_video(
     }
 
     const size_t imgSize = width * height;
-
-    // Pre-computed Gaussian kernel
-    constexpr double inv16 = 1.0 / 16.0;
-    constexpr double gauss[9] = {
-        inv16, 2*inv16, inv16,
-        2*inv16, 4*inv16, 2*inv16,
-        inv16, 2*inv16, inv16
-    };
-    constexpr double threshold = 0.09;
-
-    // Skip to start frame
     capture.set(cv::CAP_PROP_POS_FRAMES, startFrame);
+
+    // Initialize pipeline ONCE before loop
+    EdgeDetectorPipeline pipeline(width, height, 0.09);
 
     int frameIdx = 0;
     cv::Mat frameBGR(height, width, CV_8UC3);
-
-    // Thread-local buffers (avoiding allocation in loop)
     std::vector<uint8_t> grayData(imgSize);
-    std::vector<double> blurData(imgSize);
-    std::vector<double> tx(imgSize), ty(imgSize);
-    std::vector<double> gx(imgSize), gy(imgSize);
-    std::vector<double> g(imgSize), theta(imgSize);
-    std::vector<uint8_t> outputRGB(imgSize * 3);
 
     while (frameIdx < framesToProcess) {
         if (!capture.read(frameBGR)) break;
@@ -219,108 +200,22 @@ void edge_detector_video(
         ++frameIdx;
         std::cout << "Frame " << frameIdx << "/" << framesToProcess << "\r" << std::flush;
 
-        // BGR → Grayscale (average) - PARALLELIZED
+        // BGR → Grayscale
         #pragma omp parallel for
         for (int i = 0; i < imgSize; ++i) {
             const uint8_t* pixel = frameBGR.data + i * 3;
             grayData[i] = static_cast<uint8_t>((pixel[0] + pixel[1] + pixel[2]) / 3);
         }
 
-        // Gaussian blur (3x3) - PARALLELIZED
-        std::ranges::fill(blurData, 0.0);
-        #pragma omp parallel for
-        for (int r = 1; r < height - 1; ++r) {
-            for (int c = 1; c < width - 1; ++c) {
-                double sum = 0.0;
-                for (int kr = -1; kr <= 1; ++kr) {
-                    for (int kc = -1; kc <= 1; ++kc) {
-                        sum += grayData[(r + kr) * width + (c + kc)] *
-                               gauss[(kr + 1) * 3 + (kc + 1)];
-                    }
-                }
-                blurData[r * width + c] = sum;
-            }
-        }
+        // Process with pipeline (ZERO allocation)
+        const std::vector<uint8_t>& rgb = pipeline.process(grayData.data());
 
-        // Scharr separable convolution - PARALLELIZED
-        std::ranges::fill(tx, 0.0);
-        std::ranges::fill(ty, 0.0);
-        #pragma omp parallel for
-        for (int r = 0; r < height; ++r) {
-            for (uint32_t c = 1; c < width - 1; ++c) {
-                const size_t idx = r * width + c;
-                tx[idx] = blurData[idx + 1] - blurData[idx - 1];
-                ty[idx] = 47 * blurData[idx + 1] + 162 * blurData[idx] + 47 * blurData[idx - 1];
-            }
-        }
-
-        std::ranges::fill(gx, 0.0);
-        std::ranges::fill(gy, 0.0);
-        #pragma omp parallel for
-        for (int c = 1; c < width - 1; ++c) {
-            for (uint32_t r = 1; r < height - 1; ++r) {
-                const size_t idx = r * width + c;
-                gx[idx] = 47 * tx[idx + width] + 162 * tx[idx] + 47 * tx[idx - width];
-                gy[idx] = ty[idx + width] - ty[idx - width];
-            }
-        }
-
-        // Magnitude and angle - PARALLELIZED with reduction
-        double mx = -INFINITY, mn = INFINITY;
-
-        #pragma omp parallel
-        {
-            double local_mx = -INFINITY;
-            double local_mn = INFINITY;
-
-            #pragma omp for nowait
-            for (int k = 0; k < imgSize; ++k) {
-                const double x = gx[k];
-                const double y = gy[k];
-                g[k] = std::sqrt(x * x + y * y);
-                theta[k] = std::atan2(y, x);
-                local_mx = std::max(local_mx, g[k]);
-                local_mn = std::min(local_mn, g[k]);
-            }
-
-            #pragma omp critical
-            {
-                mx = std::max(mx, local_mx);
-                mn = std::min(mn, local_mn);
-            }
-        }
-
-        // HSL → RGB with thresholding - PARALLELIZED
-        const double range = (mx == mn) ? 1.0 : (mx - mn);
-        #pragma omp parallel for
-        for (int k = 0; k < imgSize; ++k) {
-            const double h = theta[k] * 180.0 / M_PI + 180.0;
-            const double v = ((g[k] - mn) / range > threshold) ? (g[k] - mn) / range : 0.0;
-            const double s = v, l = v;
-
-            const double c = (1 - std::abs(2 * l - 1)) * s;
-            const double x = c * (1 - std::abs(std::fmod(h / 60.0, 2) - 1));
-            const double m = l - c / 2.0;
-
-            double rt = 0, gt = 0, bt = 0;
-            if (h < 60)       { rt = c; gt = x; }
-            else if (h < 120) { rt = x; gt = c; }
-            else if (h < 180) { gt = c; bt = x; }
-            else if (h < 240) { gt = x; bt = c; }
-            else if (h < 300) { bt = c; rt = x; }
-            else              { bt = x; rt = c; }
-
-            outputRGB[k * 3]     = static_cast<uint8_t>(255 * (rt + m));
-            outputRGB[k * 3 + 1] = static_cast<uint8_t>(255 * (gt + m));
-            outputRGB[k * 3 + 2] = static_cast<uint8_t>(255 * (bt + m));
-        }
-
-        // RGB → BGR for OpenCV - PARALLELIZED
+        // RGB → BGR for OpenCV
         #pragma omp parallel for
         for (int i = 0; i < imgSize; ++i) {
-            frameBGR.data[i * 3]     = outputRGB[i * 3 + 2]; // B
-            frameBGR.data[i * 3 + 1] = outputRGB[i * 3 + 1]; // G
-            frameBGR.data[i * 3 + 2] = outputRGB[i * 3];     // R
+            frameBGR.data[i * 3]     = rgb[i * 3 + 2]; // B
+            frameBGR.data[i * 3 + 1] = rgb[i * 3 + 1]; // G
+            frameBGR.data[i * 3 + 2] = rgb[i * 3];     // R
         }
 
         video.write(frameBGR);
@@ -334,11 +229,28 @@ void edge_detector_video(
     const double startTime = static_cast<double>(startFrame) / fps;
     const double duration = static_cast<double>(framesToProcess) / fps;
 
-    std::string ffmpegCmd = "ffmpeg -i \"" + tempVideoPath + "\" -i \"" + inputVideoPath +
-                            "\" -ss " + std::to_string(startTime) +
-                            " -t " + std::to_string(duration) +
-                            " -c:v copy -c:a aac -map 0:v:0 -map 1:a:0? -y \"" +
-                            outputVideoPath + "\" 2>&1";
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(2) << fps;
+
+    std::string outputVideoPath = std::string(FOLDER_VIDEOS) + baseName +
+        " - Edge Detector - " + std::to_string(framesToProcess) + " frames ";
+    if (framesToProcess == totalFrames) {
+        outputVideoPath += "- "  +  oss.str() + " fps.mp4";
+    } else {
+        outputVideoPath += "{" + std::to_string(frames[0]) + "-" + std::to_string(frames[1]) + "} " +
+            oss.str() + " fps.mp4";
+    }
+    std::string ffmpegCmd =
+        "ffmpeg -fflags +genpts "
+        "-i \"" + tempVideoPath + "\" "
+        "-ss " + std::to_string(startTime) + " "
+        "-i \"" + inputVideoPath + "\" "
+        "-t " + std::to_string(duration) + " "
+        "-map 0:v:0 -map 1:a:0? "
+        "-c:v copy -c:a aac "
+        "-avoid_negative_ts make_zero "
+        "-shortest -y \"" +
+        outputVideoPath + "\" 2>&1";
 
     const int result = system(ffmpegCmd.c_str());
 
@@ -349,6 +261,7 @@ void edge_detector_video(
         std::cerr << "Warning: FFmpeg failed. Video saved without audio: " << tempVideoPath << "\n";
     }
 }
+
 
 void processVideoTransforms(
     const std::string& baseName,
@@ -364,6 +277,7 @@ void processVideoTransforms(
         return ext == ".mp4" || ext == ".MP4";
     }()) {
         std::cout << "Fichier MP4 détecté → edge_detector_video" << std::endl;
+        // edge_detector_video(baseName, inputPath, frames);
         edge_detector_video(baseName, inputPath, frames);
     } else {
         std::cout << "Fichier non-MP4 détecté → several_colors_transformations_streaming" << std::endl;
