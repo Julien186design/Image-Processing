@@ -208,35 +208,69 @@ void oneColorTransformations(
 	const std::string weightedColors = makeWeightedColors(weightOfRed, weightOfGreen, weightOfBlue);
 	const std::string suffix = ".png";
 
-	for (int tole = tolerance[0]; tole <= tolerance[1]; tole += tolerance[2]) {
-		std::string outputPath;
-		outputPath.reserve(256);
-		buffer.resetFrom(baseImage);
+    for (int tole = tolerance[0]; tole <= tolerance[1]; tole += tolerance[2]) {
+        buffer.resetFrom(baseImage);
 
-		buffer.get().simplify_to_dominant_color_combinations_without_average(
-			tole, r_third, g_third, b_third, r_half, g_half, b_half, r_full, g_full, b_full
-		);
-		buffer.saveAs((prefix0 + std::to_string(tole) + weightedColors + suffix).c_str());
+        buffer.get().simplify_to_dominant_color_combinations_without_average(
+            tole, r_third, g_third, b_third,
+            r_half, g_half, b_half,
+            r_full, g_full, b_full
+        );
 
-		// Restaurer au lieu de resetFrom si possible
-		buffer.get().simplify_to_dominant_color_combinations_with_average(tole);
-		buffer.saveAs((prefix1 + std::to_string(tole) + suffix).c_str());
-	}
+        std::string path;
+        path.reserve(256);
+        path = prefix0;
+        path += std::to_string(tole);
+        path += weightedColors;
+        path += suffix;
 
-	for (int i = tolerance[0]; i <= tolerance[1]; i += tolerance[2]) {
-		std::string path1 = ONE_COLOR_FOLDER + baseName + " - Average 1 - Tolerance " + std::to_string(i) + ".png";
-		std::string path2 = ONE_COLOR_FOLDER + baseName + " - Average 0 - Tolerance " + std::to_string(i) + ".png";
+        buffer.saveAs(path.c_str());
 
-		Image image1(path1.c_str());
-		Image image2(path2.c_str());
+        buffer.get().simplify_to_dominant_color_combinations_with_average(tole);
 
-		ImageBuffer diffBuffer(image1.w, image1.h, image1.channels);
-		diffBuffer.resetFrom(image1);
-		diffBuffer.get().diffmap(image2);
+        path.clear();
+        path = prefix1;
+        path += std::to_string(tole);
+        path += suffix;
 
-		std::string outputPath = DIFFMAP_FOLDER + baseName + " - Diffmap - Tolerance " + std::to_string(i) + ".png";
-		diffBuffer.saveAs(outputPath.c_str());
-	}
+        buffer.saveAs(path.c_str());
+    }
+
+    for (int i = tolerance[0]; i <= tolerance[1]; i += tolerance[2]) {
+
+        std::string path1;
+        path1.reserve(256);
+        path1 = ONE_COLOR_FOLDER;
+        path1 += baseName;
+        path1 += " - Average 1 - Tolerance ";
+        path1 += std::to_string(i);
+        path1 += ".png";
+
+        std::string path2;
+        path2.reserve(256);
+        path2 = ONE_COLOR_FOLDER;
+        path2 += baseName;
+        path2 += " - Average 0 - Tolerance ";
+        path2 += std::to_string(i);
+        path2 += ".png";
+
+        Image image1(path1.c_str());
+        Image image2(path2.c_str());
+
+        ImageBuffer diffBuffer(image1.w, image1.h, image1.channels);
+        diffBuffer.resetFrom(image1);
+        diffBuffer.get().diffmap(image2);
+
+        std::string outputPath;
+        outputPath.reserve(256);
+        outputPath = DIFFMAP_FOLDER;
+        outputPath += baseName;
+        outputPath += " - Diffmap - Tolerance ";
+        outputPath += std::to_string(i);
+        outputPath += ".png";
+
+        diffBuffer.saveAs(outputPath.c_str());
+    }
 }
 
 void several_colors_transformations_AVX2(
@@ -455,182 +489,21 @@ void several_colors_partial_transformations(
     }
 }
 
-
-
-void edge_detector(
+void edge_detector_image(
 	const Image& baseImage,
 	const std::string& baseName
 ) {
 	Image img = baseImage;
 	img.grayscale_avg();
-	int img_size = img.w*img.h;
 
-	Image gray_img(img.w, img.h, 1);
-	//printf("Dimensions de gray_img : %d x %d, data=%p\n", gray_img.w, gray_img.h, gray_img.data);
-	if (gray_img.w <= 0 || gray_img.h <= 0 || gray_img.data == nullptr) {
-		fprintf(stderr, "Erreur : gray_img invalide !\n");
-		return;
-	}
+	EdgeDetectorPipeline pipeline(img.w, img.h, 0.09);
+	const std::vector<uint8_t>& rgb = pipeline.process(img.data);
 
-	for(uint64_t k=0; k<img_size; ++k) {
-		gray_img.data[k] = img.data[img.channels*k];
-	}
-
-	// blur
-	Image blur_img(img.w, img.h, 1);
-	constexpr double inv16 = 1.0 / 16.0;
-	double gauss[9] = {
-		inv16, 2*inv16, inv16,
-		2*inv16, 4*inv16, 2*inv16,
-		inv16, 2*inv16, inv16
-	};
-	/*
-	printf("Noyau (kernel) : [");
-	for (int i = 0; i < 9; ++i) printf("%.2f, ", gauss[i]);
-	printf("]\n");
-	*/
-	gray_img.convolve_linear(0, 3, 3, gauss, 1, 1);
-	for(uint64_t k=0; k<img_size; ++k) {
-		blur_img.data[k] = gray_img.data[k];
-	}
-	/*
-	outputPath = std::string(OUTPUT_FOLDER) + folderEdgeDetector + baseName + " blur.png";
-	blur_img.write(outputPath.c_str());
-	*/
-
-	// edge detection
-	auto tx = new double[img_size]();
-	auto ty = new double[img_size]();
-	auto gx = new double[img_size]();
-	auto gy = new double[img_size]();
-
-
-	//seperable convolution
-
-	// Première boucle : remplir tx/ty pour r ∈ [0, h-1]
-	for(uint32_t r=0; r<blur_img.h; ++r) {
-		for(uint32_t c=1; c<blur_img.w-1; ++c) {
-			tx[r*blur_img.w+c] = blur_img.data[r*blur_img.w+c+1] - blur_img.data[r*blur_img.w+c-1];
-			ty[r*blur_img.w+c] = 47*blur_img.data[r*blur_img.w+c+1] + 162*blur_img.data[r*blur_img.w+c] + 47*blur_img.data[r*blur_img.w+c-1];
-		}
-	}
-	for(uint32_t c=1; c<blur_img.w-1; ++c) {
-		for(uint32_t r=1; r<blur_img.h-1; ++r) {
-			gx[r*blur_img.w+c] = 47*tx[(r+1)*blur_img.w+c] + 162*tx[r*blur_img.w+c] + 47*tx[(r-1)*blur_img.w+c];
-			gy[r*blur_img.w+c] = ty[(r+1)*blur_img.w+c] - ty[(r-1)*blur_img.w+c];
-		}
-	}
-
-	delete[] tx;
-	delete[] ty;
-
-	//make test images
-	double mxx = -INFINITY,
-		mxy = -INFINITY,
-		mnx = INFINITY,
-		mny = INFINITY;
-	for(uint64_t k=0; k<img_size; ++k) {
-		mxx = fmax(mxx, gx[k]);
-		mxy = fmax(mxy, gy[k]);
-		mnx = fmin(mnx, gx[k]);
-		mny = fmin(mny, gy[k]);
-	}
-	Image Gx(img.w, img.h, 1);
-	Image Gy(img.w, img.h, 1);
-	for(uint64_t k=0; k<img_size; ++k) {
-		Gx.data[k] = static_cast<uint8_t>(255*(gx[k]-mnx)/(mxx-mnx));
-		Gy.data[k] = static_cast<uint8_t>(255*(gy[k]-mny)/(mxy-mny));
-	}
-
-	// fun part
-	double threshold = 0.09;
-	auto g = new double[img_size];
-	auto theta = new double[img_size];
-	double x, y;
-	for(uint64_t k=0; k<img_size; ++k) {
-		x = gx[k];
-		y = gy[k];
-		g[k] = sqrt(x*x + y*y);
-		theta[k] = atan2(y, x);
-	}
-
-
-	//make images
-	double mx = -INFINITY,
-		mn = INFINITY;
-	for(uint64_t k=0; k<img_size; ++k) {
-		mx = fmax(mx, g[k]);
-		mn = fmin(mn, g[k]);
-	}
-	Image G(img.w, img.h, 1);
 	Image GT(img.w, img.h, 3);
+	std::memcpy(GT.data, rgb.data(), rgb.size());
 
-	double h, s, l;
-	double v;
-	for(uint64_t k=0; k<img_size; ++k) {
-		//theta to determine hue
-		h = theta[k]*180./M_PI + 180.;
-
-		//v is the relative edge strength
-		if(mx == mn) {
-			v = 0;
-		}
-		else {
-			v = (g[k]-mn)/(mx-mn) > threshold ? (g[k]-mn)/(mx-mn) : 0;
-		}
-		s = l = v;
-
-		//hsl => rgb
-		double c = (1-abs(2*l-1))*s;
-		double x = c*(1-abs(fmod((h/60),2)-1));
-		double m = l-c/2;
-
-		double rt, gt, bt;
-		rt=bt=gt = 0;
-		if(h < 60) {
-			rt = c;
-			gt = x;
-		}
-		else if(h < 120) {
-			rt = x;
-			gt = c;
-		}
-		else if(h < 180) {
-			gt = c;
-			bt = x;
-		}
-		else if(h < 240) {
-			gt = x;
-			bt = c;
-		}
-		else if(h < 300) {
-			bt = c;
-			rt = x;
-		}
-		else {
-			bt = x;
-			rt = c;
-		}
-
-		uint8_t red, green, blue;
-		red = static_cast<uint8_t>(255*(rt+m));
-		green = static_cast<uint8_t>(255*(gt+m));
-		blue = static_cast<uint8_t>(255*(bt+m));
-
-		GT.data[k*3] = red;
-		GT.data[k*3+1] = green;
-		GT.data[k*3+2] = blue;
-
-		G.data[k] = static_cast<uint8_t>(255 * v);
-	}
-
-	std::string outputPath = std::string(FOLDER_EDGEDETECTOR) + baseName + " GT.png";
+	const std::string outputPath = std::string(FOLDER_EDGEDETECTOR) + baseName + " GT.png";
 	GT.write(outputPath.c_str());
-
-	delete[] gx;
-	delete[] gy;
-	delete[] g;
-	delete[] theta;
 }
 
 
@@ -673,7 +546,7 @@ void processImageTransforms(
 	/*
 	removeColors(image, baseName);
 	*/
-	edge_detector(image, baseName);
+	edge_detector_image(image, baseName);
 
 
     if (oneColor) {
