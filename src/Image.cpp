@@ -7,10 +7,6 @@
  *Run/Edit Configurations
  *Working directory : $PROJECT8DIR$ | /[...]/CLion Projects/Image Processing
 
-
- *Dev-C++ on Windows
- *#include "stb_image.h"
- *#include "stb_image_write.h"
 */
 #include <stb_image.h>
 #include <stb_image_write.h>
@@ -20,83 +16,10 @@
 #include <cstdio>
 #include <algorithm>
 #include <fmt/color.h>
-#include <fmt/core.h>
 #include <cmath>     // for std::round
+#include <ranges>
 
 #include "Image.h"
-
-
-Image::Image(const char* filename, int channel_force) {
-	if(read(filename, channel_force)) {
-		printf("Read %s\n", filename);
-		size = w*h*channels;
-	} else {
-		printf("Failed to read %s\n", filename);
-	}
-}
-
-Image::Image(const int w, const int h, const int channels) : w(w), h(h), channels(channels) {
-	size = w*h*channels;
-	data = new uint8_t[size];
-}
-
-Image::Image(const Image& img) : Image(img.w, img.h, img.channels) {
-	memcpy(data, img.data, size);
-}
-
-Image::~Image() {
-	// stbi_image_free(data);
-	delete[] data;
-
-}
-
-bool Image::read(const char* filename, int channel_force) {
-	data = stbi_load(filename, &w, &h, &channels, channel_force);
-	channels = channel_force == 0 ? channels : channel_force;
-	return data != nullptr; // used to be NULL
-}
-
-bool Image::write(const char* filename) {
-	ImageType type = get_file_type(filename);
-	int success;
-	switch (type) {
-		case PNG:
-			success = stbi_write_png(filename, w, h, channels, data, w*channels);
-			break;
-		case BMP:
-			success = stbi_write_bmp(filename, w, h, channels, data);
-			break;
-		case JPG:
-			success = stbi_write_jpg(filename, w, h, channels, data, 100);
-			break;
-		case TGA:
-			success = stbi_write_tga(filename, w, h, channels, data);
-			break;
-	}
-	if (success != 0) {
-		printf("\e[32mWrote \e[36m%s\e[0m, %d, %d, %d, %zu\n", filename, w, h, channels, size);
-		return true;
-	} else {
-		printf("\e[31;1m Failed to write \e[36m%s\e[0m, %d, %d, %d, %zu\n", filename, w, h, channels, size); //width, height
-		return false;
-	}
-}
-
-ImageType Image::get_file_type(const char* filename) {
-	const char* ext = strrchr(filename, '.');
-	if(ext != nullptr) {
-		if(strcmp(ext, ".png") == 0) {
-			return PNG;
-		} else if(strcmp(ext, ".jpg") == 0) {
-			return JPG;
-		} else if(strcmp(ext, ".bmp") == 0) {
-			return BMP;
-		} else if(strcmp(ext, ".tga") == 0) {
-			return TGA;
-		}
-	}
-	return PNG;
-}
 
 EdgeDetectorResult process_edge_detection_core(
     const uint8_t* grayData,
@@ -204,14 +127,9 @@ EdgeDetectorResult process_edge_detection_core(
     return {std::move(outputRGB), mn, mx};
 }
 
-#include "Image.h"
-#include <ranges>
-#include <omp.h>
-#include <algorithm>
-
 constexpr double EdgeDetectorPipeline::gaussKernel[9];
 
-EdgeDetectorPipeline::EdgeDetectorPipeline(int w, int h, double thresh)
+EdgeDetectorPipeline::EdgeDetectorPipeline(const int w, const int h, const double thresh)
     : width(w), height(h), imgSize(w * h), threshold(thresh)
 {
     // Pre-allocate all buffers
@@ -322,6 +240,80 @@ const std::vector<uint8_t>& EdgeDetectorPipeline::process(const uint8_t* grayDat
 
     return outputRGB;
 }
+
+Image::Image(const char* filename, int channel_force) {
+	if(read(filename, channel_force)) {
+		printf("Read %s\n", filename);
+		size = w*h*channels;
+	} else {
+		printf("Failed to read %s\n", filename);
+	}
+}
+
+Image::Image(const int w, const int h, const int channels) : w(w), h(h), channels(channels) {
+	size = w*h*channels;
+	data = new uint8_t[size];
+}
+
+Image::Image(const Image& img) : Image(img.w, img.h, img.channels) {
+	memcpy(data, img.data, size);
+}
+
+Image::~Image() {
+	// stbi_image_free(data);
+	delete[] data;
+
+}
+
+bool Image::read(const char* filename, int channel_force) {
+	data = stbi_load(filename, &w, &h, &channels, channel_force);
+	channels = channel_force == 0 ? channels : channel_force;
+	return data != nullptr; // used to be NULL
+}
+
+bool Image::write(const char* filename) {
+	ImageType type = get_file_type(filename);
+	int success;
+	switch (type) {
+		case PNG:
+			success = stbi_write_png(filename, w, h, channels, data, w*channels);
+			break;
+		case BMP:
+			success = stbi_write_bmp(filename, w, h, channels, data);
+			break;
+		case JPG:
+			success = stbi_write_jpg(filename, w, h, channels, data, 100);
+			break;
+		case TGA:
+			success = stbi_write_tga(filename, w, h, channels, data);
+			break;
+	}
+	if (success != 0) {
+		printf("\e[32mWrote \e[36m%s\e[0m, %d, %d, %d, %zu\n", filename, w, h, channels, size);
+		return true;
+	} else {
+		printf("\e[31;1m Failed to write \e[36m%s\e[0m, %d, %d, %d, %zu\n", filename, w, h, channels, size); //width, height
+		return false;
+	}
+}
+
+ImageType Image::get_file_type(const char* filename) {
+	const char* ext = strrchr(filename, '.');
+	if(ext != nullptr) {
+		if(strcmp(ext, ".png") == 0) {
+			return PNG;
+		} else if(strcmp(ext, ".jpg") == 0) {
+			return JPG;
+		} else if(strcmp(ext, ".bmp") == 0) {
+			return BMP;
+		} else if(strcmp(ext, ".tga") == 0) {
+			return TGA;
+		}
+	}
+	return PNG;
+}
+
+
 
 Image& Image::below_threshold(const int threshold, const int cn, const bool useDarkNuance) {
 	const int newColor = useDarkNuance ? cn : 255 - cn;
