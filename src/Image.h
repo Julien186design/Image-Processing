@@ -5,13 +5,12 @@
 #include <cstdio>
 #include <complex>
 #include <vector>
-
+#include <cmath>
+#include <iostream>
 
 //legacy feature of C
 #undef __STRICT_ANSI__
 #define _USE_MATH_DEFINES
-#include <cmath>
-#include <iostream>
 #ifndef M_PI
 	#define M_PI (3.14159265358979323846)
 #endif
@@ -32,6 +31,55 @@ namespace SimpleColors {
 	constexpr uint8_t HALF = 127;
 	constexpr uint8_t FULL = 255;
 }
+
+struct EdgeDetectorResult {
+    std::vector<uint8_t> outputRGB;
+    double minGradient, maxGradient;
+};
+
+EdgeDetectorResult process_edge_detection_core(
+    const uint8_t* grayData,
+    int width,
+    int height,
+    double threshold = 0.09
+);
+
+
+class EdgeDetectorPipeline {
+private:
+	const int width;
+	const int height;
+	const size_t imgSize;
+	const double threshold;
+
+	// Pre-computed Gaussian kernel
+	static constexpr double inv16 = 1.0 / 16.0;
+	static constexpr double gaussKernel[9] = {
+		inv16, 2*inv16, inv16,
+		2*inv16, 4*inv16, 2*inv16,
+		inv16, 2*inv16, inv16
+	};
+
+	// Reusable buffers (allocated once in constructor)
+	std::vector<double> blurData;
+	std::vector<double> tx, ty;
+	std::vector<double> gx, gy;
+	std::vector<double> g, theta;
+	std::vector<uint8_t> outputRGB;
+
+public:
+	EdgeDetectorPipeline(int w, int h, double thresh = 0.09);
+
+	// Process grayscale image and return RGB edge-detected output
+	// Input: grayscale data (width × height bytes)
+	// Output: RGB data (width × height × 3 bytes)
+	const std::vector<uint8_t>& process(const uint8_t* grayData);
+
+	// Getters
+	int getWidth() const { return width; }
+	int getHeight() const { return height; }
+	double getThreshold() const { return threshold; }
+};
 
 
 struct Image {
