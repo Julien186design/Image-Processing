@@ -127,121 +127,8 @@ EdgeDetectorResult process_edge_detection_core(
     return {std::move(outputRGB), mn, mx};
 }
 
-constexpr double EdgeDetectorPipeline::gaussKernel[9];
 
-EdgeDetectorPipeline::EdgeDetectorPipeline(const int w, const int h, const double thresh)
-    : width(w), height(h), imgSize(w * h), threshold(thresh)
-{
-    // Pre-allocate all buffers
-    blurData.resize(imgSize);
-    tx.resize(imgSize);
-    ty.resize(imgSize);
-    gx.resize(imgSize);
-    gy.resize(imgSize);
-    g.resize(imgSize);
-    theta.resize(imgSize);
-    outputRGB.resize(imgSize * 3);
-}
-
-const std::vector<uint8_t>& EdgeDetectorPipeline::process(const uint8_t* grayData) {
-    // === Gaussian blur (3x3) ===
-    std::ranges::fill(blurData, 0.0);
-
-    #pragma omp parallel for
-    for (int r = 1; r < height - 1; ++r) {
-        for (int c = 1; c < width - 1; ++c) {
-            double sum = 0.0;
-            for (int kr = -1; kr <= 1; ++kr) {
-                for (int kc = -1; kc <= 1; ++kc) {
-                    sum += grayData[(r + kr) * width + (c + kc)] *
-                           gaussKernel[(kr + 1) * 3 + (kc + 1)];
-                }
-            }
-            blurData[r * width + c] = sum;
-        }
-    }
-
-    // === Scharr separable convolution (step 1) ===
-    std::ranges::fill(tx, 0.0);
-    std::ranges::fill(ty, 0.0);
-
-    #pragma omp parallel for
-    for (int r = 0; r < height; ++r) {
-        for (int c = 1; c < width - 1; ++c) {
-            const size_t idx = r * width + c;
-            tx[idx] = blurData[idx + 1] - blurData[idx - 1];
-            ty[idx] = 47 * blurData[idx + 1] + 162 * blurData[idx] + 47 * blurData[idx - 1];
-        }
-    }
-
-    // === Scharr separable convolution (step 2) ===
-    std::ranges::fill(gx, 0.0);
-    std::ranges::fill(gy, 0.0);
-
-    #pragma omp parallel for
-    for (int c = 1; c < width - 1; ++c) {
-        for (int r = 1; r < height - 1; ++r) {
-            const size_t idx = r * width + c;
-            gx[idx] = 47 * tx[idx + width] + 162 * tx[idx] + 47 * tx[idx - width];
-            gy[idx] = ty[idx + width] - ty[idx - width];
-        }
-    }
-
-    // === Magnitude and angle + min/max reduction ===
-    double mx = -INFINITY, mn = INFINITY;
-
-    #pragma omp parallel
-    {
-        double local_mx = -INFINITY;
-        double local_mn = INFINITY;
-
-        #pragma omp for nowait
-        for (int k = 0; k < imgSize; ++k) {
-            const double x = gx[k];
-            const double y = gy[k];
-            g[k] = std::sqrt(x * x + y * y);
-            theta[k] = std::atan2(y, x);
-            local_mx = std::max(local_mx, g[k]);
-            local_mn = std::min(local_mn, g[k]);
-        }
-
-        #pragma omp critical
-        {
-            mx = std::max(mx, local_mx);
-            mn = std::min(mn, local_mn);
-        }
-    }
-
-    // === HSL → RGB conversion with thresholding ===
-    const double range = (mx == mn) ? 1.0 : (mx - mn);
-
-    #pragma omp parallel for
-    for (int k = 0; k < imgSize; ++k) {
-        const double h = theta[k] * 180.0 / M_PI + 180.0;
-        const double v = ((g[k] - mn) / range > threshold) ? (g[k] - mn) / range : 0.0;
-        const double s = v, l = v;
-
-        const double c = (1 - std::abs(2 * l - 1)) * s;
-        const double x = c * (1 - std::abs(std::fmod(h / 60.0, 2) - 1));
-        const double m = l - c / 2.0;
-
-        double rt = 0, gt = 0, bt = 0;
-        if (h < 60)       { rt = c; gt = x; }
-        else if (h < 120) { rt = x; gt = c; }
-        else if (h < 180) { gt = c; bt = x; }
-        else if (h < 240) { gt = x; bt = c; }
-        else if (h < 300) { bt = c; rt = x; }
-        else              { bt = x; rt = c; }
-
-        outputRGB[k * 3]     = static_cast<uint8_t>(255 * (rt + m));
-        outputRGB[k * 3 + 1] = static_cast<uint8_t>(255 * (gt + m));
-        outputRGB[k * 3 + 2] = static_cast<uint8_t>(255 * (bt + m));
-    }
-
-    return outputRGB;
-}
-
-Image::Image(const char* filename, int channel_force) {
+Image::Image(const char* filename, const int channel_force) {
 	if(read(filename, channel_force)) {
 		printf("Read %s\n", filename);
 		size = w*h*channels;
@@ -250,9 +137,11 @@ Image::Image(const char* filename, int channel_force) {
 	}
 }
 
-Image::Image(const int w, const int h, const int channels) : w(w), h(h), channels(channels) {
-	size = w*h*channels;
+Image::Image(const int w, const int h, const int channels)
+	: w(w), h(h), channels(channels) {
+	size = w * h * channels;
 	data = new uint8_t[size];
+	memset(data, 0, size);
 }
 
 Image::Image(const Image& img) : Image(img.w, img.h, img.channels) {
@@ -265,7 +154,7 @@ Image::~Image() {
 
 }
 
-bool Image::read(const char* filename, int channel_force) {
+bool Image::read(const char* filename, const int channel_force) {
 	data = stbi_load(filename, &w, &h, &channels, channel_force);
 	channels = channel_force == 0 ? channels : channel_force;
 	return data != nullptr; // used to be NULL
@@ -1133,7 +1022,6 @@ Image& Image::operator=(const Image& img) {
 
 
 Image& Image::std_convolve_clamp_to_0(const int channel, const int ker_w, const int ker_h, const double *ker, int cr, int c) {
-    printf("Début de std_convolve_clamp_to_0 : w=%d, h=%d, channel=%d\n", w, h, channel);
 
     // Vérification des dimensions de l'image
     if (w <= 0 || h <= 0 || data == nullptr) {
@@ -1192,7 +1080,6 @@ Image& Image::std_convolve_clamp_to_0(const int channel, const int ker_w, const 
 
     // Libération de la mémoire
     delete[] new_data;
-    printf("Fin de std_convolve_clamp_to_0.\n");
 
     return *this;
 }
