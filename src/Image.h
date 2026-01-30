@@ -7,6 +7,8 @@
 #include <vector>
 #include <cmath>
 #include <iostream>
+#include <cstring>
+#include "schrift.h"
 
 //legacy feature of C
 #undef __STRICT_ANSI__
@@ -15,7 +17,6 @@
 	#define M_PI (3.14159265358979323846)
 #endif
 
-#include "schrift.h"
 
 #define STEG_HEADER_SIZE sizeof(uint32_t) * 8
 
@@ -43,44 +44,6 @@ EdgeDetectorResult process_edge_detection_core(
     int height,
     double threshold = 0.09
 );
-
-
-class EdgeDetectorPipeline {
-private:
-	const int width;
-	const int height;
-	const size_t imgSize;
-	const double threshold;
-
-	// Pre-computed Gaussian kernel
-	static constexpr double inv16 = 1.0 / 16.0;
-	static constexpr double gaussKernel[9] = {
-		inv16, 2*inv16, inv16,
-		2*inv16, 4*inv16, 2*inv16,
-		inv16, 2*inv16, inv16
-	};
-
-	// Reusable buffers (allocated once in constructor)
-	std::vector<double> blurData;
-	std::vector<double> tx, ty;
-	std::vector<double> gx, gy;
-	std::vector<double> g, theta;
-	std::vector<uint8_t> outputRGB;
-
-public:
-	EdgeDetectorPipeline(int w, int h, double thresh = 0.09);
-
-	// Process grayscale image and return RGB edge-detected output
-	// Input: grayscale data (width × height bytes)
-	// Output: RGB data (width × height × 3 bytes)
-	const std::vector<uint8_t>& process(const uint8_t* grayData);
-
-	// Getters
-	int getWidth() const { return width; }
-	int getHeight() const { return height; }
-	double getThreshold() const { return threshold; }
-};
-
 
 struct Image {
 	uint8_t* data = nullptr;
@@ -111,6 +74,8 @@ struct Image {
 	Image(const Image& img);
 	Image& operator=(const Image& img);
 	~Image();
+
+
 
 	bool read(const char* filename, int channel_force = 0);
 	bool write(const char* filename);
@@ -180,7 +145,7 @@ struct Image {
 
 	Image& original_black_and_white(int threshold);
 	Image& reversed_black_and_white(int threshold);
-	
+
 	static void simplify_pixel(
 	uint8_t& r, uint8_t& g, uint8_t& b,
 	uint8_t r_val_third, uint8_t g_val_third, uint8_t b_val_third,
@@ -236,6 +201,122 @@ struct Image {
 
 
 };
+
+
+class EdgeDetectorPipeline {
+private:
+    const int width;
+    const int height;
+    const size_t imgSize;
+    const double threshold;
+
+    // Noyau gaussien
+    static constexpr double inv16 = 1.0 / 16.0;
+    double gaussKernel[9] = {
+        inv16, 2*inv16, inv16,
+        2*inv16, 4*inv16, 2*inv16,
+        inv16, 2*inv16, inv16
+    };
+
+    // Buffers en double
+    std::vector<double> blurData;
+    std::vector<double> tx, ty;
+    std::vector<double> gx, gy;
+    std::vector<double> g, theta;
+    std::vector<uint8_t> outputRGB;
+
+public:
+    EdgeDetectorPipeline(const int w, const int h, const double thresh = 0.09)
+        : width(w), height(h), imgSize(w * h), threshold(thresh),
+          blurData(imgSize, 0.0), tx(imgSize, 0.0), ty(imgSize, 0.0),
+          gx(imgSize, 0.0), gy(imgSize, 0.0), g(imgSize, 0.0), theta(imgSize, 0.0),
+          outputRGB(imgSize * 3, 0) {}
+
+    const std::vector<uint8_t>& process(const uint8_t* grayData) {
+        // 1. Copie des données grises en double
+        for (size_t k = 0; k < imgSize; ++k) {
+            blurData[k] = grayData[k] / 255.0;
+        }
+
+        // 2. Convolution avec le noyau gaussien
+        Image tempImg(width, height, 1);
+        for (size_t k = 0; k < imgSize; ++k) {
+            tempImg.data[k] = static_cast<uint8_t>(blurData[k] * 255);
+        }
+        tempImg.convolve_linear(0, 3, 3, gaussKernel, 1, 1);
+        for (size_t k = 0; k < imgSize; ++k) {
+            blurData[k] = tempImg.data[k] / 255.0;
+        }
+
+        // 3. Calcul de tx/ty (convolution séparable, axe horizontal)
+        for (uint32_t r = 0; r < height; ++r) {
+            for (uint32_t c = 1; c < width - 1; ++c) {
+                size_t idx = r * width + c;
+                tx[idx] = blurData[idx + 1] - blurData[idx - 1];
+                ty[idx] = 47.0 * blurData[idx + 1] + 162.0 * blurData[idx] + 47.0 * blurData[idx - 1];
+            }
+        }
+
+        // 4. Calcul de gx/gy (convolution séparable, axe vertical)
+        for (uint32_t c = 1; c < width - 1; ++c) {
+            for (uint32_t r = 1; r < height - 1; ++r) {
+                size_t idx = r * width + c;
+                gx[idx] = 47.0 * tx[(r + 1) * width + c] + 162.0 * tx[r * width + c] + 47.0 * tx[(r - 1) * width + c];
+                gy[idx] = ty[(r + 1) * width + c] - ty[(r - 1) * width + c];
+            }
+        }
+
+        // 5. Calcul du gradient (magnitude et orientation)
+        for (size_t k = 0; k < imgSize; ++k) {
+            g[k] = sqrt(gx[k] * gx[k] + gy[k] * gy[k]);
+            theta[k] = atan2(gy[k], gx[k]);
+        }
+
+        // 6. Normalisation et seuillage
+        double mx = -INFINITY;
+        double mn = INFINITY;
+        for (size_t k = 0; k < imgSize; ++k) {
+            if (g[k] > mx) mx = g[k];
+            if (g[k] < mn) mn = g[k];
+        }
+
+        // 7. Conversion HSL→RGB
+        for (size_t k = 0; k < imgSize; ++k) {
+            double h = theta[k] * 180.0 / M_PI + 180.0;
+            double v = (mx == mn) ? 0.0 : (g[k] - mn) / (mx - mn);
+            v = (v > threshold) ? v : 0.0;
+            double s = v;
+            double l = v;
+
+            // HSL → RGB
+            double c = (1 - fabs(2 * l - 1)) * s;
+            double x = c * (1 - fabs(fmod(h / 60.0, 2) - 1));
+            double m = l - c / 2.0;
+
+            double rt = 0, gt = 0, bt = 0;
+            if (h < 60) {
+                rt = c; gt = x;
+            } else if (h < 120) {
+                rt = x; gt = c;
+            } else if (h < 180) {
+                gt = c; bt = x;
+            } else if (h < 240) {
+                gt = x; bt = c;
+            } else if (h < 300) {
+                bt = c; rt = x;
+            } else {
+                bt = x; rt = c;
+            }
+
+            outputRGB[k * 3]     = static_cast<uint8_t>(255 * (rt + m));
+            outputRGB[k * 3 + 1] = static_cast<uint8_t>(255 * (gt + m));
+            outputRGB[k * 3 + 2] = static_cast<uint8_t>(255 * (bt + m));
+        }
+
+        return outputRGB;
+    }
+};
+
 
 struct ImageInfo {
 	std::string baseName;
