@@ -277,7 +277,6 @@ void processVideoTransforms(
         return ext == ".mp4" || ext == ".MP4";
     }()) {
         std::cout << "Fichier MP4 détecté → edge_detector_video" << std::endl;
-        // edge_detector_video(baseName, inputPath, frames);
         edge_detector_video(baseName, inputPath, frames);
     } else {
         std::cout << "Fichier non-MP4 détecté → several_colors_transformations_streaming" << std::endl;
