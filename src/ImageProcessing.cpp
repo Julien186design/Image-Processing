@@ -1,3 +1,4 @@
+#include "Image.h"
 #include "ImageProcessing.h"
 #include "TransformationsConfig.h"
 #include <vector>
@@ -495,9 +496,16 @@ void edge_detector_image(
 ) {
 	Image img = baseImage;
 	img.grayscale_avg();
+    const int img_size = img.w*img.h;
+
+    std::vector<uint8_t> grayData(img.w * img.h);
+
+    for (uint64_t k = 0; k < img_size; ++k) {
+        grayData[k] = img.data[k * img.channels];  // Extrait le canal de gris
+    }
 
 	EdgeDetectorPipeline pipeline(img.w, img.h, 0.09);
-	const std::vector<uint8_t>& rgb = pipeline.process(img.data);
+	const std::vector<uint8_t>& rgb = pipeline.process(grayData.data());
 
 	Image GT(img.w, img.h, 3);
 	std::memcpy(GT.data, rgb.data(), rgb.size());
@@ -546,6 +554,7 @@ void processImageTransforms(
 	/*
 	removeColors(image, baseName);
 	*/
+
 	edge_detector_image(image, baseName);
 
 
