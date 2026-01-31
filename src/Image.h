@@ -210,7 +210,7 @@ private:
     const size_t imgSize;
     const double threshold;
 
-    // Noyau gaussien
+    // Gaussian kernel
     static constexpr double inv16 = 1.0 / 16.0;
     double gaussKernel[9] = {
         inv16, 2*inv16, inv16,
@@ -218,37 +218,39 @@ private:
         inv16, 2*inv16, inv16
     };
 
-    // Buffers en double
+    // Double buffers
     std::vector<double> blurData;
     std::vector<double> tx, ty;
     std::vector<double> gx, gy;
     std::vector<double> g, theta;
     std::vector<uint8_t> outputRGB;
 
+    // ========== CHANGE: Persistent Image buffer to avoid per-frame allocation ==========
+    Image tempImg;  // Allocated once in constructor, reused across all frames
+
 public:
+    // ========== CHANGE: Initialize tempImg(w, h, 1) in initializer list ==========
     EdgeDetectorPipeline(const int w, const int h, const double thresh = 0.09)
         : width(w), height(h), imgSize(w * h), threshold(thresh),
           blurData(imgSize, 0.0), tx(imgSize, 0.0), ty(imgSize, 0.0),
           gx(imgSize, 0.0), gy(imgSize, 0.0), g(imgSize, 0.0), theta(imgSize, 0.0),
-          outputRGB(imgSize * 3, 0) {}
+          outputRGB(imgSize * 3, 0),
+          tempImg(w, h, 1) {}  // Single allocation for all frames
 
     const std::vector<uint8_t>& process(const uint8_t* grayData) {
-        // 1. Copie des données grises en double
-        for (size_t k = 0; k < imgSize; ++k) {
-            blurData[k] = grayData[k] / 255.0;
-        }
+        // ========== CHANGE: Direct copy to persistent tempImg.data (no intermediate conversion) ==========
+        // 1. Copy grayscale data directly to tempImg buffer
+        std::memcpy(tempImg.data, grayData, imgSize);
 
-        // 2. Convolution avec le noyau gaussien
-        Image tempImg(width, height, 1);
-        for (size_t k = 0; k < imgSize; ++k) {
-            tempImg.data[k] = static_cast<uint8_t>(blurData[k] * 255);
-        }
+        // 2. Gaussian convolution (operates on tempImg.data in-place)
         tempImg.convolve_linear(0, 3, 3, gaussKernel, 1, 1);
+
+        // 3. Convert blurred result to double precision
         for (size_t k = 0; k < imgSize; ++k) {
             blurData[k] = tempImg.data[k] / 255.0;
         }
 
-        // 3. Calcul de tx/ty (convolution séparable, axe horizontal)
+        // 4. Compute tx/ty (separable convolution, horizontal axis)
         for (uint32_t r = 0; r < height; ++r) {
             for (uint32_t c = 1; c < width - 1; ++c) {
                 size_t idx = r * width + c;
@@ -257,7 +259,7 @@ public:
             }
         }
 
-        // 4. Calcul de gx/gy (convolution séparable, axe vertical)
+        // 5. Compute gx/gy (separable convolution, vertical axis)
         for (uint32_t c = 1; c < width - 1; ++c) {
             for (uint32_t r = 1; r < height - 1; ++r) {
                 size_t idx = r * width + c;
@@ -266,13 +268,13 @@ public:
             }
         }
 
-        // 5. Calcul du gradient (magnitude et orientation)
+        // 6. Compute gradient magnitude and orientation
         for (size_t k = 0; k < imgSize; ++k) {
             g[k] = sqrt(gx[k] * gx[k] + gy[k] * gy[k]);
             theta[k] = atan2(gy[k], gx[k]);
         }
 
-        // 6. Normalisation et seuillage
+        // 7. Normalize and apply threshold
         double mx = -INFINITY;
         double mn = INFINITY;
         for (size_t k = 0; k < imgSize; ++k) {
@@ -280,7 +282,7 @@ public:
             if (g[k] < mn) mn = g[k];
         }
 
-        // 7. Conversion HSL→RGB
+        // 8. Convert HSL→RGB
         for (size_t k = 0; k < imgSize; ++k) {
             double h = theta[k] * 180.0 / M_PI + 180.0;
             double v = (mx == mn) ? 0.0 : (g[k] - mn) / (mx - mn);
@@ -288,7 +290,7 @@ public:
             double s = v;
             double l = v;
 
-            // HSL → RGB
+            // HSL → RGB conversion
             double c = (1 - fabs(2 * l - 1)) * s;
             double x = c * (1 - fabs(fmod(h / 60.0, 2) - 1));
             double m = l - c / 2.0;
