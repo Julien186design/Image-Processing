@@ -9,7 +9,7 @@
 #include <fstream>
 #include <sstream>
 #include <iomanip>
-
+#include <algorithm>
 
 void several_colors_transformations_streaming(
     const std::string& baseName,
@@ -18,129 +18,128 @@ void several_colors_transformations_streaming(
     const std::vector<float>& proportions,
     const std::vector<int>& colorNuances
 ) {
-    const Image baseImage(inputPath.c_str());
-
-    // Pre-convert base image to BGR format (OpenCV native)
-    std::vector<uint8_t> baseImageBGR(baseImage.size);
-    for(size_t i = 0; i < baseImage.size; i += 3) {
-        baseImageBGR[i]     = baseImage.data[i + 2]; // B
-        baseImageBGR[i + 1] = baseImage.data[i + 1]; // G
-        baseImageBGR[i + 2] = baseImage.data[i];     // R
+    // Load the input image using OpenCV to avoid manual data handling
+    cv::Mat baseImageMat = cv::imread(inputPath, cv::IMREAD_COLOR);
+    if (baseImageMat.empty()) {
+        std::cerr << "Error: Could not load image " << inputPath << std::endl;
+        return;
     }
 
-    ImageBuffer modified(baseImage.w, baseImage.h, baseImage.channels);
-    std::vector<uint8_t> modifiedBGR(baseImage.size);
 
+    // Initialize modified image as a copy of the base image
+    cv::Mat modifiedMat = baseImageMat.clone();
+
+    // Calculate the number of steps and frames
     const int numSteps = static_cast<int>((proportions[1] - proportions[0]) / proportions[2]) + 1;
     const int nFrames = numSteps * 2 * (((colorNuances[1] - colorNuances[0]) / colorNuances[2]) + 1);
 
+    // Generate output video path
     const std::string colorNuancesToString = "{" + std::to_string(colorNuances[0]) + "-" +
-                std::to_string(colorNuances[1]) + "-" + std::to_string(colorNuances[2]) + "}";
+                                              std::to_string(colorNuances[1]) + "-" +
+                                              std::to_string(colorNuances[2]) + "}";
     const std::string outputVideoPath = std::string(FOLDER_VIDEOS) + baseName + " - " +
-        std::to_string(nFrames) + " images - " + std::to_string(fps) + " fps - " +
-            colorNuancesToString + ".mp4";
+                                        std::to_string(nFrames) + " images - " +
+                                        std::to_string(fps) + " fps - " +
+                                        colorNuancesToString + ".mp4";
 
+    // Initialize video writer
     cv::VideoWriter video(outputVideoPath,
-        cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
-        fps,
-        cv::Size(baseImage.w, baseImage.h));
+                          cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
+                          fps,
+                          cv::Size(baseImageMat.cols, baseImageMat.rows));
 
-    // Pre-allocate cv::Mat wrapper (no data copy)
-    cv::Mat frameBGR(baseImage.h, baseImage.w, CV_8UC3, modifiedBGR.data());
-
-    // ========== PRE-COMPUTE THRESHOLDS ==========
-    const size_t pixelCount = baseImage.w * baseImage.h;
-    std::vector<int> rgbSums(pixelCount);
-
-    for(size_t i = 0, idx = 0; i < baseImage.size; i += baseImage.channels, ++idx) {
-        rgbSums[idx] = baseImage.data[i] + baseImage.data[i+1] + baseImage.data[i+2];
+    if (!video.isOpened()) {
+        std::cerr << "Error: Could not open video writer for " << outputVideoPath << std::endl;
+        return;
     }
 
-    std::vector<int> thresholds(numSteps);
-    std::vector<int> sortedRGB = rgbSums;
-    std::ranges::sort(sortedRGB);
+    // Pre-compute RGB sums for thresholding
+    const size_t pixelCount = baseImageMat.rows * baseImageMat.cols;
+    std::vector<int> rgbSums(pixelCount, 0);
 
-    for(int i = 0; i < numSteps; ++i) {
+    for (size_t i = 0; i < pixelCount; ++i) {
+        const cv::Vec3b& pixel = baseImageMat.at<cv::Vec3b>(i / baseImageMat.cols, i % baseImageMat.cols);
+        rgbSums[i] = pixel[0] + pixel[1] + pixel[2];
+    }
+
+    // Sort RGB sums to compute thresholds
+    std::vector<int> sortedRGB = rgbSums;
+    std::sort(sortedRGB.begin(), sortedRGB.end());
+
+    std::vector<int> thresholds(numSteps);
+    for (int i = 0; i < numSteps; ++i) {
         const float cp = proportions[0] + i * proportions[2];
         thresholds[i] = sortedRGB[static_cast<size_t>(pixelCount * cp)];
     }
 
-    // ========== OPTIMIZED FRAME WRITER ==========
-    auto writeFrame = [&]() {
-        // Convert RGB to BGR in-place
-        for(size_t i = 0; i < baseImage.size; i += 3) {
-            modifiedBGR[i]     = modified.get().data[i + 2]; // B
-            modifiedBGR[i + 1] = modified.get().data[i + 1]; // G
-            modifiedBGR[i + 2] = modified.get().data[i];     // R
-        }
-        video.write(frameBGR); // frameBGR already points to modifiedBGR
-    };
-
-    // ========== PRE-COMPUTE PIXEL MASKS ==========
-    std::vector<std::vector<size_t>> pixelsBelowThreshold(numSteps);
-    for(int propIdx = 0; propIdx < numSteps; ++propIdx) {
-        pixelsBelowThreshold[propIdx].reserve(pixelCount / 2); // Estimate
-        for(size_t pixelIdx = 0; pixelIdx < pixelCount; ++pixelIdx) {
-            if(rgbSums[pixelIdx] <= thresholds[propIdx]) {
-                pixelsBelowThreshold[propIdx].push_back(pixelIdx * baseImage.channels);
+    // Pre-compute pixel masks to avoid repeated calculations
+    std::vector<std::vector<bool>> pixelMask(numSteps, std::vector<bool>(pixelCount, false));
+    for (int propIdx = 0; propIdx < numSteps; ++propIdx) {
+        for (size_t pixelIdx = 0; pixelIdx < pixelCount; ++pixelIdx) {
+            if (rgbSums[pixelIdx] <= thresholds[propIdx]) {
+                pixelMask[propIdx][pixelIdx] = true;
             }
         }
     }
 
-    // ========== OPTIMIZED PROCESSING ==========
+    // Lambda function to write a frame to the video
+    auto writeFrame = [&]() {
+        video.write(modifiedMat);
+    };
+
+    // Lambda function to process a frame with color transformations
     auto process = [&](const int propIdx, const bool reverseOrder) {
-        const auto& pixelIndices = pixelsBelowThreshold[propIdx];
+        const auto& mask = pixelMask[propIdx];
         const int startIdx = reverseOrder ? 1 : 0;
         const int reverseIdx = reverseOrder ? 0 : 1;
 
-        // Phase 1: ascending colorNuance
-        for(int colorNuance = colorNuances[0];
-            colorNuance <= colorNuances[1];
-            colorNuance += colorNuances[2])
-        {
-            if(colorNuance == colorNuances[0]) {
-                modified.resetFrom(baseImage);
+        // Phase 1: Ascending colorNuance
+        for (int colorNuance = colorNuances[0]; colorNuance <= colorNuances[1]; colorNuance += colorNuances[2]) {
+            if (colorNuance == colorNuances[0]) {
+                modifiedMat = baseImageMat.clone();
             }
 
             const uint8_t newColor = (startIdx == 1) ? colorNuance : (255 - colorNuance);
 
-            // Only modify pixels below threshold
-            for(const size_t byteIdx : pixelIndices) {
-                modified.get().data[byteIdx] =
-                modified.get().data[byteIdx + 1] =
-                modified.get().data[byteIdx + 2] = newColor;
+            for (size_t pixelIdx = 0; pixelIdx < pixelCount; ++pixelIdx) {
+                if (mask[pixelIdx]) {
+                    const int row = pixelIdx / baseImageMat.cols;
+                    const int col = pixelIdx % baseImageMat.cols;
+                    modifiedMat.at<cv::Vec3b>(row, col) = cv::Vec3b(newColor, newColor, newColor);
+                }
             }
             writeFrame();
         }
 
-        // Phase 2: descending colorNuance
-        for(int colorNuance = colorNuances[1];
-            colorNuance >= colorNuances[0];
-            colorNuance -= colorNuances[2])
-        {
+        // Phase 2: Descending colorNuance
+        for (int colorNuance = colorNuances[1]; colorNuance >= colorNuances[0]; colorNuance -= colorNuances[2]) {
             const uint8_t newColor = (reverseIdx == 1) ? colorNuance : (255 - colorNuance);
 
-            // Only modify pixels above threshold
-            for(const size_t byteIdx : pixelIndices) {
-                modified.get().data[byteIdx] =
-                modified.get().data[byteIdx + 1] =
-                modified.get().data[byteIdx + 2] = newColor;
+            for (size_t pixelIdx = 0; pixelIdx < pixelCount; ++pixelIdx) {
+                if (mask[pixelIdx]) {
+                    const int row = pixelIdx / baseImageMat.cols;
+                    const int col = pixelIdx % baseImageMat.cols;
+                    modifiedMat.at<cv::Vec3b>(row, col) = cv::Vec3b(newColor, newColor, newColor);
+                }
             }
             writeFrame();
         }
     };
 
+    // Process each step with alternating order
     bool reverseOrder = false;
-    for(int i = 0; i < numSteps; ++i) {
+    for (int i = 0; i < numSteps; ++i) {
         const float cp = proportions[0] + i * proportions[2];
         std::cout << "Processing proportion " << cp << std::endl;
         process(i, reverseOrder);
         reverseOrder = !reverseOrder;
     }
 
+    // Release resources
     video.release();
     std::cout << "\n" << outputVideoPath << " created\n";
 }
+
 
 void edge_detector_video(
     const std::string& baseName,
@@ -158,7 +157,6 @@ void edge_detector_video(
     const int height = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_HEIGHT));
     const int totalFrames = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_COUNT));
     std::cout << "totalFrames " << totalFrames << std::endl;
-    const double sourceFps = capture.get(cv::CAP_PROP_FPS);
     const double fps = capture.get(cv::CAP_PROP_FPS);
 
     const int startFrame = std::max(0, frames[0]);
@@ -276,10 +274,10 @@ void processVideoTransforms(
         const std::string ext = inputPath.substr(inputPath.length() - 4);
         return ext == ".mp4" || ext == ".MP4";
     }()) {
-        std::cout << "Fichier MP4 détecté → edge_detector_video" << std::endl;
+        std::cout << "MP4 file detected → edge_detector_video" << std::endl;
         edge_detector_video(baseName, inputPath, frames);
     } else {
-        std::cout << "Fichier non-MP4 détecté → several_colors_transformations_streaming" << std::endl;
+        std::cout << "Non-MP4 file detected → several_colors_transformations_streaming" << std::endl;
         several_colors_transformations_streaming(baseName, inputPath, fps, proportions, colorNuances);
     }
 }
