@@ -38,12 +38,7 @@ struct EdgeDetectorResult {
     double minGradient, maxGradient;
 };
 
-EdgeDetectorResult process_edge_detection_core(
-    const uint8_t* grayData,
-    int width,
-    int height,
-    double threshold = 0.09
-);
+
 
 struct Image {
 	uint8_t* data = nullptr;
@@ -253,7 +248,7 @@ public:
         // 4. Compute tx/ty (separable convolution, horizontal axis)
         for (uint32_t r = 0; r < height; ++r) {
             for (uint32_t c = 1; c < width - 1; ++c) {
-                size_t idx = r * width + c;
+                const size_t idx = r * width + c;
                 tx[idx] = blurData[idx + 1] - blurData[idx - 1];
                 ty[idx] = 47.0 * blurData[idx + 1] + 162.0 * blurData[idx] + 47.0 * blurData[idx - 1];
             }
@@ -275,7 +270,9 @@ public:
         }
 
         // 7. Normalize and apply threshold
-        double mx = -INFINITY;
+    	double mx = -std::numeric_limits<double>::infinity();
+    	// used to be double mx = -INFINITY;
+    	// update deleted waning "Clang-Tidy: Narrowing conversion from constant 'float' to 'double'"
         double mn = INFINITY;
         for (size_t k = 0; k < imgSize; ++k) {
             if (g[k] > mx) mx = g[k];
@@ -358,5 +355,12 @@ inline ImageInfo extractImageInfo(const std::string& inputFile) {
 
 	return {baseName, inputPath};
 }
+
+EdgeDetectorResult process_edge_detection_core(
+	const uint8_t* grayData,
+	int width,
+	int height,
+	double threshold = 0.09
+);
 
 #endif // IMAGE_H
