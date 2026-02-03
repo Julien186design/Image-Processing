@@ -171,24 +171,80 @@ void removeColors(
 	buffer.saveAs(outputPath.c_str());
 }
 
-std::string makeWeightedColors(float r, float g, float b) {
-	std::string s;
-	s.reserve(32); // pour éviter plusieurs allocations
 
-	s += ' ';
-	s += std::format("{:.2f}", r);
-	s += '-';
-	s += std::format("{:.2f}", g);
-	s += '-';
-	s += std::format("{:.2f}", b);
-
-	return s;
-}
 
 void oneColorTransformations(
     const Image& baseImage,
     const std::string& baseName,
-    const std::vector<int>& tolerance
+    const std::vector<int>& tolerance,
+    const std::vector<float>& weightOfRGB
+) {
+    const std::string ONE_COLOR_FOLDER = std::string(OUTPUT_FOLDER) + "One Color/";
+    ImageBuffer buffer(baseImage.w, baseImage.h, baseImage.channels);
+
+    const std::string prefix0 = ONE_COLOR_FOLDER + baseName + " - Average 0 - Tolerance ";
+    const std::string prefix1 = ONE_COLOR_FOLDER + baseName + " - Average 1 - Tolerance ";
+    const std::string suffix = ".png";
+
+    std::vector<std::vector<float>> configs;
+    configs.reserve(13);
+
+    // Config de base (apparaît 1 fois)
+    configs.push_back({1.0f, 1.0f, 1.0f});
+
+    // Configs avec variation de n
+    for (int n = 1; n <= 1 / weightOfRGB[3] + 1; ++n) {
+        const float weight = n * weightOfRGB[3];
+        configs.push_back({1.0f - weight, 1.0f, 1.0f});
+        configs.push_back({1.0f - weight, 1.0f - weight, 1.0f});
+        configs.push_back({1.0f - weight, 1.0f, 1.0f - weight});
+        configs.push_back({1.0f, 1.0f - weight, 1.0f - weight});
+    }
+
+    for (const auto& config : configs) {
+        const auto [r_third, g_third, b_third,
+            r_half, g_half, b_half,
+            r_full, g_full, b_full] =
+            calculateWeightedColors(config);
+
+        const std::string weightedColors = makeWeightedColors(config);
+
+        for (int tole = tolerance[0]; tole <= tolerance[1]; tole += tolerance[2]) {
+            buffer.resetFrom(baseImage);
+
+            buffer.get().simplify_to_dominant_color_combinations_without_average(
+                tole, r_third, g_third, b_third,
+                r_half, g_half, b_half,
+                r_full, g_full, b_full
+            );
+
+            std::string path;
+            path.reserve(256);
+            path = prefix0;
+            path += std::to_string(tole);
+            path += weightedColors;
+            path += suffix;
+
+            buffer.saveAs(path.c_str());
+
+            buffer.get().simplify_to_dominant_color_combinations_with_average(tole);
+
+            path.clear();
+            path = prefix1;
+            path += std::to_string(tole);
+            path += weightedColors;
+            path += suffix;
+
+            buffer.saveAs(path.c_str());
+        }
+    }
+}
+
+void diffmapTransformations(
+    const Image& baseImage,
+    const std::string& baseName,
+    const std::vector<int>& tolerance,
+    const std::vector<float>& weightOfRGB
 ) {
 
 	const std::string ONE_COLOR_FOLDER = std::string(OUTPUT_FOLDER) + "One Color/";
@@ -196,46 +252,11 @@ void oneColorTransformations(
 
 	ImageBuffer buffer(baseImage.w, baseImage.h, baseImage.channels);
 
-	constexpr float weightOfRed = 0.25f;
-	constexpr float weightOfGreen = 1.0f;
-	constexpr float weightOfBlue = 0.75f;
-	const auto [r_third, g_third, b_third,
-		r_half, g_half, b_half,
-		r_full, g_full, b_full] =
-		calculateWeightedColors(weightOfRed, weightOfGreen, weightOfBlue);
-
 	const std::string prefix0 = ONE_COLOR_FOLDER + baseName + " - Average 0 - Tolerance ";
 	const std::string prefix1 = ONE_COLOR_FOLDER + baseName + " - Average 1 - Tolerance ";
-	const std::string weightedColors = makeWeightedColors(weightOfRed, weightOfGreen, weightOfBlue);
+	const std::string weightedColors = makeWeightedColors(weightOfRGB);
 	const std::string suffix = ".png";
 
-    for (int tole = tolerance[0]; tole <= tolerance[1]; tole += tolerance[2]) {
-        buffer.resetFrom(baseImage);
-
-        buffer.get().simplify_to_dominant_color_combinations_without_average(
-            tole, r_third, g_third, b_third,
-            r_half, g_half, b_half,
-            r_full, g_full, b_full
-        );
-
-        std::string path;
-        path.reserve(256);
-        path = prefix0;
-        path += std::to_string(tole);
-        path += weightedColors;
-        path += suffix;
-
-        buffer.saveAs(path.c_str());
-
-        buffer.get().simplify_to_dominant_color_combinations_with_average(tole);
-
-        path.clear();
-        path = prefix1;
-        path += std::to_string(tole);
-        path += suffix;
-
-        buffer.saveAs(path.c_str());
-    }
 
     for (int i = tolerance[0]; i <= tolerance[1]; i += tolerance[2]) {
 
@@ -557,9 +578,9 @@ void processImageTransforms(
 
 	edge_detector_image(image, baseName);
 
-
+    const std::vector<float> weightOfRGB = {1, 1, 1, 0.25};
     if (oneColor) {
-        oneColorTransformations(image, baseName, tolerance);
+        oneColorTransformations(image, baseName, tolerance, weightOfRGB);
     }
 
     if (severalColorsByThreshold) {
