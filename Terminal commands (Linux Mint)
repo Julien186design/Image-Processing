@@ -25,6 +25,9 @@ for dir in Input Output; do echo "=== $dir ==="; tree -d "$dir"; echo; done
 Listing files whose name begis by 623 and contains "rage 0" and " 1.00-" | Display the number of files.
 find . -type f -name "623*rage 0* 1.00-*" | awk '{print; c++} END{print c " files"}'
 
+Listing unique filenames by cutting after ".jpg". 
+find -type f   -printf '%f\n' | sed 's/ *.jpg//' | sort -u
+
 Listing unique filenames in the "One Color" folder by cutting after "- Tolerance". Delete "Output/One Color" to run in the current folder.
 find "Output/One Color" -type f   -printf '%f\n' | sed 's/ - Tolerance.*//' | sort -u
 
