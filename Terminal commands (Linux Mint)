@@ -31,8 +31,11 @@ find "Output/One Color" -type f   -printf '%f\n' | sed 's/ - Tolerance.*//' | so
 Listing unique filenames whose name contains "CN 40" | display names truncated from "TB".
 find -type f -name "*CN 40*" -printf '%f\n' | sed 's/TB.*//' | sort -u
 
-Listing the 20 largest files (useful to launch in the "Output" folder if processing time is getting important).
+Listing the 20 largest JPG and PNG files (useful to launch in the "Output" folder if processing time is getting important).
 find . -type f -exec du -h {} + | sort --human-numeric-sort --reverse | head -n 20
+
+Listing the 20 largest
+find . -type f \( -iname '*.jpg' -o -iname '*.png' \) -exec du -h {} + | sort -hr | head -n 20
 
 Listing MP4 files, including subfolders
 find . -type f \( -iname "*.mp4" \) -printf "%P\n"
