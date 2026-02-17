@@ -7,6 +7,8 @@
 #include <cstring>
 #include <immintrin.h> // For AVX2 intrinsics
 #include <format>
+#include <execution>
+#include <omp.h>
 
 using GenericTransformationFunc = std::function<void(Image&, int, const std::vector<int>&)>;
 
@@ -180,36 +182,48 @@ void oneColorTransformations(
     const std::vector<float>& weightOfRGB
 ) {
     const std::string ONE_COLOR_FOLDER = std::string(OUTPUT_FOLDER) + "One Color/";
-    ImageBuffer buffer(baseImage.w, baseImage.h, baseImage.channels);
-
     const std::string prefix0 = ONE_COLOR_FOLDER + baseName + " - Average 0 - Tolerance ";
     const std::string prefix1 = ONE_COLOR_FOLDER + baseName + " - Average 1 - Tolerance ";
     const std::string suffix = ".png";
 
-    std::vector<std::vector<float>> configs;
-    configs.reserve(13);
-
-    // Config de base (apparaît 1 fois)
-    configs.push_back({1.0f, 1.0f, 1.0f});
-
-    // Configs avec variation de n
-    for (int n = 1; n <= 1 / weightOfRGB[3] + 1; ++n) {
-        const float weight = n * weightOfRGB[3];
-        configs.push_back({1.0f - weight, 1.0f, 1.0f});
-        configs.push_back({1.0f - weight, 1.0f - weight, 1.0f});
-        configs.push_back({1.0f - weight, 1.0f, 1.0f - weight});
-        configs.push_back({1.0f, 1.0f - weight, 1.0f - weight});
-    }
+    const std::vector<std::vector<float>> configs = generateColorConfigs(weightOfRGB[3]);
 
     for (const auto& config : configs) {
-        const auto [r_third, g_third, b_third,
-            r_half, g_half, b_half,
-            r_full, g_full, b_full] =
-            calculateWeightedColors(config);
+        if ((config[0] == 0.0f && config[1] == 1.0f) ||
+            (config[0] == 1.0f && config[1] == 0.0f)) {
+            std::cout << "[";
+            for (size_t i = 0; i < config.size(); ++i) {
+                std::cout << "  " << config[i];
+                if (i != config.size() - 1) {
+                    std::cout << ", ";
+                }
+            }
+            std::cout << "]" << std::endl;
+        }
+    }
 
-        const std::string weightedColors = makeWeightedColors(config);
+    const int num_tole = (tolerance[1] - tolerance[0]) / tolerance[2] + 1;
+    const size_t total_iterations = configs.size() * num_tole;
 
-        for (int tole = tolerance[0]; tole <= tolerance[1]; tole += tolerance[2]) {
+    #pragma omp parallel
+    {
+        ImageBuffer buffer(baseImage.w, baseImage.h, baseImage.channels);
+        std::string path;
+        path.reserve(256);
+
+        #pragma omp for schedule(dynamic)
+        for (size_t iter = 0; iter < total_iterations; ++iter) {
+            const size_t config_idx = iter / num_tole;
+            const int tole = tolerance[0] + (iter % num_tole) * tolerance[2];
+
+            const auto& config = configs[config_idx];
+            const auto [r_third, g_third, b_third,
+                r_half, g_half, b_half,
+                r_full, g_full, b_full] =
+                calculateWeightedColors(config);
+
+            const std::string weightedColors = makeWeightedColors(config);
+
             buffer.resetFrom(baseImage);
 
             buffer.get().simplify_to_dominant_color_combinations_without_average(
@@ -218,8 +232,7 @@ void oneColorTransformations(
                 r_full, g_full, b_full
             );
 
-            std::string path;
-            path.reserve(256);
+            path.clear();
             path = prefix0;
             path += std::to_string(tole);
             path += weightedColors;
@@ -295,106 +308,6 @@ void diffmapTransformations(
     }
 }
 
-void several_colors_transformations_AVX2(
-	const Image& baseImage,
-	const std::string& baseName,
-	const int firstThreshold,
-	const int lastThreshold,
-	const int step,
-	const int firstColorNuance,
-	const int lastColorNuance,
-	const int stepColorNuance
-) {
-	ImageBuffer modified(baseImage.w, baseImage.h, baseImage.channels);
-	std::ostringstream oss;
-
-	for (int currentThreshold = firstThreshold; currentThreshold <= lastThreshold; currentThreshold += step) {
-		const int threshold_div3 = currentThreshold / 3;
-
-		for (size_t transformIdx = 0; transformIdx < colors_nuances_transformations_AVX2.size(); ++transformIdx) {
-			const auto& transform = colors_nuances_transformations_AVX2[transformIdx];
-			const auto& outputDir = total_step_by_step_output_dirs[transformIdx];
-			const auto& suffix = total_step_by_step_suffixes[transformIdx];
-
-			for (int currentColorNuance = firstColorNuance;
-				currentColorNuance <= lastColorNuance;
-				currentColorNuance += stepColorNuance) {
-
-				modified.resetFrom(baseImage);
-				transform(modified.get(), currentThreshold, static_cast<std::uint8_t>(currentColorNuance));
-
-				// Construction du chemin
-				oss.str("");
-				oss << outputDir << baseName << " - " << suffix << " - "
-					<< threshold_div3 << " - CN " << currentColorNuance << ".png";
-
-				modified.saveAs(oss.str().c_str());
-				}
-		}
-	}
-}
-
-void several_colors_transformations_by_threshold(
-    const Image& baseImage,
-    const std::string& baseName,
-    const int firstThreshold,
-    const int lastThreshold,
-    const int step,
-    const std::vector<int>& colorNuances
-) {
-    ImageBuffer modified(baseImage.w, baseImage.h, baseImage.channels);
-
-    auto process = [&](const int currentThreshold, const bool duplicate120) {
-        for (size_t transformIdx = 0; transformIdx < transformations_by_threshold.size(); ++transformIdx) {
-            for (int currentColorNuance = colorNuances[0];
-                 currentColorNuance <= colorNuances[1];
-                 currentColorNuance += colorNuances[2]) {
-
-                modified.resetFrom(baseImage);
-
-                transformations_by_threshold[transformIdx](
-                    modified.get(), currentThreshold, currentColorNuance
-                );
-
-                // Sortie standard
-                std::string outputPath = OutputPathBuilder::buildStandard(
-                    total_step_by_step_output_dirs[transformIdx],
-                    baseName,
-                    " - ",
-                    total_step_by_step_suffixes[transformIdx],
-                    currentThreshold / 3
-                );
-                outputPath += " - CN " + std::to_string(currentColorNuance) + ".png";
-                modified.saveAs(outputPath.c_str());
-
-                // Duplication spécifique pour 120
-                if (duplicate120) {
-                    std::string path120 = OutputPathBuilder::build120(
-                        FOLDER_120,
-                        baseName,
-                        " - ",
-                        total_step_by_step_suffixes[transformIdx]
-                    );
-                    path120 += "120 - CN " + std::to_string(currentColorNuance) + ".png";
-                    modified.saveAs(path120.c_str());
-                }
-            }
-        }
-    };
-
-    process(360, true);
-
-    for (int currentThreshold = firstThreshold;
-         currentThreshold <= lastThreshold;
-         currentThreshold += step) {
-
-        if (currentThreshold == 360) {
-            continue;
-        }
-
-        process(currentThreshold, false);
-    }
-}
 
 void several_colors_transformations_by_proportion(
     const Image& baseImage,
@@ -404,112 +317,156 @@ void several_colors_transformations_by_proportion(
 ) {
     ImageBuffer modified(baseImage.w, baseImage.h, baseImage.channels);
 
-    auto process = [&](const float currentProportion, const bool duplicate50) {
-        for (size_t transformIdx = 0; transformIdx < transformations_by_proportion.size(); ++transformIdx) {
-            for (int currentColorNuance = colorNuances[0];
-                 currentColorNuance <= colorNuances[1];
-                 currentColorNuance += colorNuances[2]) {
+    constexpr int percentInt50 = 50;
+    const std::string percent50Str = std::to_string(percentInt50);
+
+    auto saveImage = [&](const size_t transformIdx, const int percentInt, const int colorNuance) {
+        const std::string percentStr = std::to_string(percentInt);
+        const std::string nuanceStr = std::to_string(colorNuance);
+
+        std::string outputPath = OutputPathBuilder::buildStandard(
+            total_step_by_step_output_dirs[transformIdx],
+            baseName,
+            " - ",
+            total_step_by_step_suffixes[transformIdx],
+            percentInt
+        );
+        outputPath += "% - CN " + nuanceStr + ".png";
+        modified.saveAs(outputPath.c_str());
+    };
+
+    auto processTransformations = [&](const float proportion, const int percentInt, const bool saveTo120) {
+        for (size_t transformIdx = 0; transformIdx < transformation_params.size(); ++transformIdx) {
+            const auto [below, dark] = transformation_params[transformIdx];
+
+            for (int colorNuance = colorNuances[0];
+                 colorNuance <= colorNuances[1];
+                 colorNuance += colorNuances[2]) {
 
                 modified.resetFrom(baseImage);
+                modified.get().threshold_by_proportion(proportion, colorNuance, dark, below);
 
-                transformations_by_proportion[transformIdx](
-                    modified.get(), currentProportion, currentColorNuance
-                );
+                saveImage(transformIdx, percentInt, colorNuance);
 
-                // Sortie standard
-                std::string outputPath = OutputPathBuilder::buildStandard(
-                    total_step_by_step_output_dirs[transformIdx],
-                    baseName,
-                    " - ",
-                    total_step_by_step_suffixes[transformIdx],
-                    static_cast<int>(currentProportion * 100)
-                );
-                outputPath += "% - CN " + std::to_string(currentColorNuance) + ".png";
-                modified.saveAs(outputPath.c_str());
-
-                // Duplication spécifique pour 0.5
-                if (duplicate50) {
-                    std::string path50 = OutputPathBuilder::build120(
+                if (saveTo120) {
+                    std::string path120 = OutputPathBuilder::build120(
                         FOLDER_120,
                         baseName,
                         " - ",
                         total_step_by_step_suffixes[transformIdx]
                     );
-                    path50 += " 50% - CN " + std::to_string(currentColorNuance) + ".png";
-                    modified.saveAs(path50.c_str());
+                    path120 += " 50% - CN " + std::to_string(colorNuance) + ".png";
+                    modified.saveAs(path120.c_str());
                 }
             }
         }
     };
 
-    process(0.5f, true);
+    processTransformations(0.5f, percentInt50, true);
 
-	const int numSteps = static_cast<int>((proportions[1] - proportions[0]) / proportions[2]) + 1;
-	for (int i = 0; i < numSteps; ++i) {
-		const float currentProportion = proportions[0] + i * proportions[2];
-		if (std::abs(currentProportion - 0.5f) < 0.001f) {
-			continue;
-		}
-		process(currentProportion, false);
-	}
-
+    for (float p = proportions[0]; p <= proportions[1] + 1e-6f; p += proportions[2]) {
+        if (std::abs(p - 0.5f) > 0.001f) {
+            processTransformations(p, static_cast<int>(p * 100), false);
+        }
+    }
 }
 
 
-void several_colors_partial_transformations(
-    const Image& baseImage,
-    const std::vector<GenericTransformationFuncWithColorNuances>& transforms,
-    const std::string& baseName,
-    const int firstThreshold,
-    const int lastThreshold,
-    const int step,
-    const int fraction,
-    std::vector<int>& rectangles,
-    const std::vector<int>& colorNuances
-) {
-    ImageBuffer modified(baseImage.w, baseImage.h, baseImage.channels);
 
+void partial_transformations_by_proportion(
+    const Image& baseImage,
+    const std::string& baseName,
+    const std::vector<float>& proportions,
+    std::vector<int>& rectangles,
+    const std::vector<int>& colorNuances,
+    const int fraction
+) {
     const std::vector<std::string> partialDirs = generatePartialOutputDirs();
     const std::vector<std::string> partialSuffixes = generatePartialSuffixes();
 
     bool diagonal = false;
-
-    if (rectangles[0] == -1) {
+    if (!rectangles.empty() && rectangles[0] == -1) {
         rectangles.erase(rectangles.begin());
         diagonal = true;
     }
 
-    for (int currentThreshold = firstThreshold; currentThreshold <= lastThreshold; currentThreshold += step) {
-        for (size_t transformIdx = 0; transformIdx < partialTransformationsFunc.size(); ++transformIdx) {
-            for (int currentColorNuance = colorNuances[0];
-                currentColorNuance <= colorNuances[1]; currentColorNuance += colorNuances[2]) {
+    // Compute number of threads locally (no global side effect)
+    const int max_threads = omp_get_max_threads();
+    const int num_threads = std::max(1, max_threads - THREAD_OFFSET);
 
+    // Precompute proportion values
+    std::vector<float> prop_values;
+    prop_values.reserve(
+        static_cast<size_t>(
+            (proportions[1] - proportions[0]) / proportions[2] + 2
+        )
+    );
+
+    for (float p = proportions[0];
+         p <= proportions[1] + 1e-6f;
+         p += proportions[2]) {
+        prop_values.push_back(p);
+    }
+
+    const size_t num_props = prop_values.size();
+    const size_t num_transforms = partial_transformations_by_proportion_func.size();
+
+    #pragma omp parallel for collapse(3) schedule(dynamic) num_threads(num_threads)
+    for (size_t p_idx = 0; p_idx < num_props; ++p_idx) {
+        for (size_t transformIdx = 0; transformIdx < num_transforms; ++transformIdx) {
+            for (int colorNuance = colorNuances[0];
+                 colorNuance <= colorNuances[1];
+                 colorNuance += colorNuances[2]) {
+
+                const float p = prop_values[p_idx];
+                const int percentInt =
+                    static_cast<int>(std::round(p * 100.0f));
+
+                ImageBuffer modified(
+                    baseImage.w,
+                    baseImage.h,
+                    baseImage.channels
+                );
                 modified.resetFrom(baseImage);
 
-                transforms[transformIdx](modified.get(), currentThreshold,
-                    currentColorNuance, fraction, rectangles);
-
-                std::string outputPath = OutputPathBuilder::buildStandard(
-                    partialDirs[transformIdx],
-                    baseName,
-                    " - ",
-                    partialSuffixes[transformIdx],
-                    currentThreshold / 3
+                partial_transformations_by_proportion_func[transformIdx](
+                    modified.get(),
+                    p,
+                    colorNuance,
+                    fraction,
+                    rectangles
                 );
 
+                std::string outputPath =
+                    OutputPathBuilder::buildStandard(
+                        partialDirs[transformIdx],
+                        baseName,
+                        " - ",
+                        partialSuffixes[transformIdx],
+                        percentInt
+                    );
+
                 if (diagonal) {
-                    outputPath += " - " + std::to_string(rectangles.size()) + " Squares ";
+                    outputPath += " - " +
+                        std::to_string(rectangles.size()) +
+                        " Squares";
                 } else {
-                    outputPath += " - Rectangles " + std::to_string(rectangles[0]) +
-                    " - " + std::to_string(rectangles.back());
+                    outputPath += " - Rectangles " +
+                        std::to_string(rectangles.front()) +
+                        " - " +
+                        std::to_string(rectangles.back());
                 }
-                outputPath += " CN " +
-                        std::to_string(currentColorNuance) + ".png";
+
+                outputPath += " - CN " +
+                    std::to_string(colorNuance) +
+                    ".png";
+
                 modified.saveAs(outputPath.c_str());
             }
         }
     }
 }
+
 
 void edge_detector_image(
 	const Image& baseImage,
@@ -545,7 +502,7 @@ void processImageTransforms(
     const int fraction,
     std::vector<int>& rectanglesToModify,
     const std::vector<int>& tolerance,
-    const bool severalColorsByThreshold,
+    const std::vector<float> &weightOfRGB,
     const bool severalColorsByProportion,
     const bool totalBlackAndWhite,
     const bool totalReversal,
@@ -578,15 +535,11 @@ void processImageTransforms(
 
 	edge_detector_image(image, baseName);
 
-    const std::vector<float> weightOfRGB = {1, 1, 1, 0.25};
+
     if (oneColor) {
         oneColorTransformations(image, baseName, tolerance, weightOfRGB);
     }
 
-    if (severalColorsByThreshold) {
-        several_colors_transformations_by_threshold(image, baseName, first_threshold, last_threshold, step,
-            colorNuances);
-    }
 
 	if (severalColorsByProportion) {
 		several_colors_transformations_by_proportion(image, baseName,
@@ -628,7 +581,7 @@ void processImageTransforms(
     }
 
     if (alternatingBlackAndWhite) {
-        std::vector altParams = {first_threshold, last_threshold, step};
+        const std::vector altParams = {first_threshold, last_threshold, step};
         applyAndSaveGenericTransformations(
             image,
             wrapAlternatingTransforms(total_alternating_black_and_white_transformations),
@@ -646,32 +599,14 @@ void processImageTransforms(
     }
 
     if (partial) {
-        several_colors_partial_transformations(
-            image,
-            wrapPartialTransformsWithRectangles(partialTransformationsFunc),
-            baseName,
-            first_threshold,
-            last_threshold,
-            step,
-            fraction,
-            rectanglesToModify,
-            colorNuances
-        );
+        partial_transformations_by_proportion(
+            image, baseName, proportions, rectanglesToModify, colorNuances, fraction);
     }
 
     if (partialInDiagonal) {
         std::vector<int> rectanglesInDiagonal = genererRectanglesInDiagonal(fraction);
-        several_colors_partial_transformations(
-            image,
-            wrapPartialTransformsWithRectangles(partialTransformationsFunc),
-            baseName,
-            first_threshold,
-            last_threshold,
-            step,
-            fraction,
-            rectanglesInDiagonal,
-            colorNuances
-        );
+        partial_transformations_by_proportion(
+            image, baseName, proportions, rectanglesInDiagonal, colorNuances, fraction);
     }
 
 }
