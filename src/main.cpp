@@ -1,29 +1,22 @@
 #include "ImageProcessing.h"
 #include "VideoProcessing.h"
 #include <chrono>
-#include <omp.h>
-#include <iostream>
 
 int main() {
-	// omp_set_num_threads(3);
-	#pragma omp parallel
-	{
-		std::cout << "Thread " << omp_get_thread_num() << " sur " << omp_get_num_threads() << std::endl;
-	}
 	const auto start = std::chrono::high_resolution_clock::now();
 	const std::string inputFile = "Food/Oreo Cake.jpg";
-	
-	const std::vector<int> thresholdsAndStep = {60, 180, 30}; // {first threshold, last threshold, step}
-	const std::vector<float> proportions = {0, 1, 0.03125};
-	const std::vector<int> colorNuances = {0, 120, 10}; // {first color, last color, step}
+
+	const std::vector<int> thresholdsAndStep = {60, 240, 60}; // {first threshold, last threshold, step}
+	const std::vector<float> proportions = {0, 1, 0.125}; // {first proportion, last proportion, step}
+	const std::vector<int> colorNuances = {0, 40, 40}; // {first color, last color, step}
 	const std::vector<int> frames = {0, 0};
-	constexpr int fps = 25;
-	constexpr int fraction = 2;
-	std::vector<int> rectanglesToModify = range_to_vector({8, 15});
-	const std::vector toleranceOneColor = {0, 5, 1};
-	constexpr bool severalColorsByThreshold = false;
+	constexpr int fps = 60;
+	constexpr int fraction = 1;
+	std::vector<int> rectanglesToModify = range_to_vector({1, 3});
+	const std::vector toleranceOneColor = {0, 3, 1};
+	const std::vector<float> weightOfRGB = {1, 1, 1, 1};
 	constexpr bool severalColorsByProportion = false;
-	constexpr bool oneColor = false;
+	constexpr bool oneColor = true;
 	constexpr bool totalBlackAndWhite = false;
 	constexpr bool totalReversal = false;
 	constexpr bool partial = false;
@@ -32,8 +25,8 @@ int main() {
 
 	const auto [baseName, inputPath] = extractImageInfo(inputFile);
 
-	processImageTransforms(baseName, inputPath, thresholdsAndStep, proportions, colorNuances, fraction,
-		rectanglesToModify,	toleranceOneColor, severalColorsByThreshold, severalColorsByProportion,
+	processImageTransforms(baseName, inputPath, thresholdsAndStep, proportions, colorNuances,
+		fraction, rectanglesToModify,	toleranceOneColor, weightOfRGB, severalColorsByProportion,
 		totalBlackAndWhite, totalReversal, partial, partialInDiagonal, alternatingBlackAndWhite, oneColor);
 
 	processVideoTransforms(baseName, inputPath, fps, proportions, colorNuances, frames);
