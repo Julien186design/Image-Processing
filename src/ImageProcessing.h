@@ -9,7 +9,8 @@
 #include <functional>
 #include <cstring>
 #include <algorithm> // for std::min et std::max
-#include <iostream>
+#include <format>
+
 
 using GenericTransformationFunc = std::function<void(Image&, int, const std::vector<int>&)>;
 using GenericTransformationFuncWithColorNuances = std::function<void(Image&, int, int, int, const std::vector<int>&)>;
@@ -74,6 +75,11 @@ public:
     }
 };
 
+struct WeightedColors {
+    uint8_t r_third, g_third, b_third;
+    uint8_t r_half, g_half, b_half;
+    uint8_t r_full, g_full, b_full;
+};
 
 inline std::vector<int> genererRectanglesInDiagonal(const int fraction) {
     if (fraction <= 0) return {};
@@ -196,27 +202,65 @@ wrapTwoIntTransforms(const std::vector<TwoIntTransformationByThreshold>& transfo
     return wrapped;
 }
 
-struct WeightedColors {
-    uint8_t r_third, g_third, b_third;
-    uint8_t r_half, g_half, b_half;
-    uint8_t r_full, g_full, b_full;
-};
 
 inline WeightedColors calculateWeightedColors(
-    const float weightOfRed, const float weightOfGreen, const float weightOfBlue) {
+    const std::vector<float>& weightOfRGB) {
     return {
-        static_cast<uint8_t>(weightOfRed * SimpleColors::ONE_THIRD),
-        static_cast<uint8_t>(weightOfGreen * SimpleColors::ONE_THIRD),
-        static_cast<uint8_t>(weightOfBlue * SimpleColors::ONE_THIRD),
+        static_cast<uint8_t>(weightOfRGB[0] * SimpleColors::ONE_THIRD),
+        static_cast<uint8_t>(weightOfRGB[1] * SimpleColors::ONE_THIRD),
+        static_cast<uint8_t>(weightOfRGB[2] * SimpleColors::ONE_THIRD),
 
-        static_cast<uint8_t>(weightOfRed * SimpleColors::HALF),
-        static_cast<uint8_t>(weightOfGreen * SimpleColors::HALF),
-        static_cast<uint8_t>(weightOfBlue * SimpleColors::HALF),
+        static_cast<uint8_t>(weightOfRGB[0] * SimpleColors::HALF),
+        static_cast<uint8_t>(weightOfRGB[1] * SimpleColors::HALF),
+        static_cast<uint8_t>(weightOfRGB[2] * SimpleColors::HALF),
 
-        static_cast<uint8_t>(weightOfRed * SimpleColors::FULL),
-        static_cast<uint8_t>(weightOfGreen * SimpleColors::FULL),
-        static_cast<uint8_t>(weightOfBlue * SimpleColors::FULL)
+        static_cast<uint8_t>(weightOfRGB[0] * SimpleColors::FULL),
+        static_cast<uint8_t>(weightOfRGB[1] * SimpleColors::FULL),
+        static_cast<uint8_t>(weightOfRGB[2] * SimpleColors::FULL)
     };
+}
+
+inline std::string makeWeightedColors(const std::vector<float>& weightOfRGB) {
+    std::string s;
+    s.reserve(32); // to avoid several allocations
+
+    s += ' ';
+    s += std::format("{:.2f}", weightOfRGB[0]);
+    s += '-';
+    s += std::format("{:.2f}", weightOfRGB[1]);
+    s += '-';
+    s += std::format("{:.2f}", weightOfRGB[2]);
+
+    return s;
+}
+
+
+inline std::vector<std::vector<float>> generateColorConfigs(const float step) {
+    const int n = static_cast<int>(1.0f / step);
+    const int total_configs = (n + 1) * (4 * n - 1);
+
+    std::vector<std::vector<float>> configs;
+    configs.reserve(total_configs);
+
+    for (int i = 0; i <= n; ++i) {
+        const float weight = static_cast<float>(i) * step;
+        configs.push_back({1.0f, 1.0f, 1.0f - weight});
+
+        for (int j = 1; j <= n; ++j) {
+            const float w = step * static_cast<float>(j);
+            configs.push_back({1.0f,     1.0f - w, 1.0f - weight});
+            configs.push_back({1.0f - w, 1.0f,     1.0f - weight});
+        }
+
+        for (int j = 1; j <= n - 1; ++j) {
+            const float w1 = step * static_cast<float>(j);
+            const float w2 = step * static_cast<float>(j + 1);
+            configs.push_back({1.0f - w1, 1.0f - w2, 1.0f - weight});
+            configs.push_back({1.0f - w2, 1.0f - w1, 1.0f - weight});
+        }
+    }
+
+    return configs;
 }
 
 
@@ -229,7 +273,7 @@ void processImageTransforms(
     int fraction,
     std::vector<int>& rectanglesToModify,
     const std::vector<int>&  tolerance,
-    bool severalColorsByThreshold,
+    const std::vector<float> &weightOfRGB,
     bool severalColorsByProportion,
     bool totalBlackAndWhite,
     bool totalReversal,
