@@ -18,8 +18,10 @@
 #include <fmt/color.h>
 #include <cmath>     // for std::round
 #include <ranges>
-
 #include "Image.h"
+#include "TransformationsConfig.h"
+#include <vector>
+#include <omp.h>
 
 EdgeDetectorResult process_edge_detection_core(
     const uint8_t* grayData,
@@ -29,7 +31,12 @@ EdgeDetectorResult process_edge_detection_core(
 ) {
     const size_t imgSize = width * height;
 
-    // Pre-computed Gaussian kernel
+	// Determine the number of threads to use
+    const int max_threads = omp_get_max_threads();
+    const int threads_to_use = std::max(1, max_threads - THREAD_OFFSET);
+    omp_set_num_threads(threads_to_use);
+
+	// Pre-computed Gaussian kernel
     constexpr double inv16 = 1.0 / 16.0;
     constexpr double gauss[9] = {
         inv16, 2*inv16, inv16,
@@ -42,8 +49,8 @@ EdgeDetectorResult process_edge_detection_core(
     std::vector<double> gx(imgSize), gy(imgSize);
     std::vector<double> g(imgSize), theta(imgSize);
 
-    // === Gaussian blur ===
-    #pragma omp parallel for
+	// === Gaussian blur ===
+    #pragma omp parallel for default(none) shared(blurData, grayData, width, height, gauss)
     for (int r = 1; r < height - 1; ++r) {
         for (int c = 1; c < width - 1; ++c) {
             double sum = 0.0;
@@ -57,8 +64,8 @@ EdgeDetectorResult process_edge_detection_core(
         }
     }
 
-    // === Scharr separable convolution ===
-    #pragma omp parallel for
+	// === Scharr separable convolution ===
+    #pragma omp parallel for default(none) shared(tx, ty, blurData, width, height)
     for (int r = 0; r < height; ++r) {
         for (int c = 1; c < width - 1; ++c) {
             const size_t idx = r * width + c;
@@ -67,7 +74,7 @@ EdgeDetectorResult process_edge_detection_core(
         }
     }
 
-    #pragma omp parallel for
+    #pragma omp parallel for default(none) shared(gx, gy, tx, ty, width, height)
     for (int c = 1; c < width - 1; ++c) {
         for (int r = 1; r < height - 1; ++r) {
             const size_t idx = r * width + c;
@@ -76,9 +83,9 @@ EdgeDetectorResult process_edge_detection_core(
         }
     }
 
-    // === Magnitude/angle + min/max reduction ===
+	// === Magnitude/angle computation + min/max reduction ===
     double mx = -INFINITY, mn = INFINITY;
-    #pragma omp parallel
+    #pragma omp parallel default(none) shared(g, gx, gy, theta, mx, mn, imgSize)
     {
         double local_mx = -INFINITY, local_mn = INFINITY;
 
@@ -97,11 +104,11 @@ EdgeDetectorResult process_edge_detection_core(
         }
     }
 
-    // === HSL→RGB conversion ===
+	// === HSL to RGB conversion ===
     std::vector<uint8_t> outputRGB(imgSize * 3);
     const double range = (mx == mn) ? 1.0 : (mx - mn);
 
-    #pragma omp parallel for
+    #pragma omp parallel for default(none) shared(outputRGB, g, theta, mn, range, threshold, imgSize)
     for (int k = 0; k < imgSize; ++k) {
         const double h = theta[k] * 180.0 / M_PI + 180.0;
         const double v = ((g[k] - mn) / range > threshold) ? (g[k] - mn) / range : 0.0;
@@ -126,6 +133,7 @@ EdgeDetectorResult process_edge_detection_core(
 
     return {std::move(outputRGB), mn, mx};
 }
+
 
 
 Image::Image(const char* filename, const int channel_force) {
@@ -187,8 +195,7 @@ bool Image::write(const char* filename) {
 }
 
 ImageType Image::get_file_type(const char* filename) {
-	const char* ext = strrchr(filename, '.');
-	if(ext != nullptr) {
+	if(const char* ext = strrchr(filename, '.'); ext != nullptr) {
 		if(strcmp(ext, ".png") == 0) {
 			return PNG;
 		} else if(strcmp(ext, ".jpg") == 0) {
@@ -204,80 +211,45 @@ ImageType Image::get_file_type(const char* filename) {
 
 
 
-Image& Image::below_threshold(const int threshold, const int cn, const bool useDarkNuance) {
+Image& Image::threshold_by_proportion(
+	const float proportion,
+	const int cn,
+	const bool useDarkNuance,
+	const bool below  // true = below, false = above
+) {
+	if (proportion <= 0.0f || proportion >= 1.0f) return *this;
+
+	const size_t pixelCount = size / static_cast<size_t>(channels);
+	std::vector<int> rgbValues(pixelCount);
+
+	for(size_t i = 0, idx = 0; i < size; i += static_cast<size_t>(channels), ++idx) {
+		rgbValues[idx] = data[i] + data[i + 1] + data[i + 2];
+	}
+
+	std::vector<int> sortedValues = rgbValues;
+	if (below) {
+		std::ranges::sort(sortedValues);
+	} else {
+		std::ranges::sort(sortedValues, std::greater{});
+	}
+	const int threshold = sortedValues[static_cast<size_t>(static_cast<float>(pixelCount) * proportion)];
+
 	const int newColor = useDarkNuance ? cn : 255 - cn;
 	for(size_t i = 0; i < size; i += static_cast<size_t>(channels)) {
-		if ((data[i] + data[i + 1] + data[i + 2]) < threshold) {
+		if ((below && data[i] + data[i + 1] + data[i + 2] <= threshold) ||
+			(!below && data[i] + data[i + 1] + data[i + 2] >= threshold)) {
 			data[i] = data[i + 1] = data[i + 2] = newColor;
 		}
 	}
-
 	return *this;
 }
 
-Image& Image::aboveThreshold(const int threshold, const int cn, const bool useDarkNuance) {
-	const int newColor = useDarkNuance ? cn : 255 - cn;
-	for(size_t i = 0; i < size; i += static_cast<size_t>(channels)) {
-		if ((data[i] + data[i + 1] + data[i + 2]) > threshold) {
-			data[i] = data[i + 1] = data[i + 2] = newColor;
-		}
-	}
-
-	return *this;
+Image& Image::below_proportion(const float proportion, const int cn, const bool useDarkNuance) {
+	return threshold_by_proportion(proportion, cn, useDarkNuance, true);
 }
 
-Image& Image::belowProportion(const float proportion, const int cn, const bool useDarkNuance) {
-    if (proportion <= 0.0f || proportion >= 1.0f) return *this;
-
-    // Calculer les valeurs RGB de tous les pixels
-    const size_t pixelCount = size / static_cast<size_t>(channels);
-    std::vector<int> rgbValues(pixelCount);
-
-    for(size_t i = 0, idx = 0; i < size; i += static_cast<size_t>(channels), ++idx) {
-        rgbValues[idx] = data[i] + data[i + 1] + data[i + 2];
-    }
-
-    // Trier pour trouver le seuil correspondant à la proportion
-    std::vector<int> sortedValues = rgbValues;
-	std::ranges::sort(sortedValues);
-    const int threshold = sortedValues[static_cast<size_t>(pixelCount * proportion)];
-
-    // Appliquer la transformation
-    const int newColor = useDarkNuance ? cn : 255 - cn;
-    for(size_t i = 0; i < size; i += static_cast<size_t>(channels)) {
-        const int rgb = data[i] + data[i + 1] + data[i + 2];
-        if (rgb <= threshold) {
-            data[i] = data[i + 1] = data[i + 2] = newColor;
-        }
-    }
-    return *this;
-}
-
-Image& Image::aboveProportion(const float proportion, const int cn, const bool useDarkNuance) {
-    if (proportion <= 0.0f || proportion >= 1.0f) return *this;
-
-    // Calculer les valeurs RGB de tous les pixels
-    const size_t pixelCount = size / static_cast<size_t>(channels);
-    std::vector<int> rgbValues(pixelCount);
-
-    for(size_t i = 0, idx = 0; i < size; i += static_cast<size_t>(channels), ++idx) {
-        rgbValues[idx] = data[i] + data[i + 1] + data[i + 2];
-    }
-
-    // Trier pour trouver le seuil correspondant à la proportion
-    std::vector<int> sortedValues = rgbValues;
-	std::ranges::sort(sortedValues, std::greater{});
-    const int threshold = sortedValues[static_cast<size_t>(pixelCount * proportion)];
-
-    // Appliquer la transformation
-    const int newColor = useDarkNuance ? cn : 255 - cn;
-    for(size_t i = 0; i < size; i += static_cast<size_t>(channels)) {
-        const int rgb = data[i] + data[i + 1] + data[i + 2];
-        if (rgb >= threshold) {
-            data[i] = data[i + 1] = data[i + 2] = newColor;
-        }
-    }
-    return *this;
+Image& Image::above_proportion(const float proportion, const int cn, const bool useDarkNuance) {
+	return threshold_by_proportion(proportion, cn, useDarkNuance, false);
 }
 
 void Image::simplify_pixel(
@@ -386,8 +358,7 @@ Image& Image::simplify_to_dominant_color_combinations_without_average(
 
 Image& Image::reverseAboveThreshold(const int threshold) {
 	for(size_t i = 0; i < size; i += channels) {
-		const int rgb = (data[i] + data[i + 1] + data[i + 2]);
-		if (rgb < threshold) {
+		if (data[i] + data[i + 1] + data[i + 2] < threshold) {
 			data[i] = 255 - data[i];
 			data[i + 1] = 255 - data[i + 1];
 			data[i + 2] = 255 - data[i + 2];
@@ -398,8 +369,7 @@ Image& Image::reverseAboveThreshold(const int threshold) {
 
 Image& Image::reverseBelowThreshold(const int threshold) {
 	for(size_t i = 0; i < size; i+=channels) {
-		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb > threshold) {
+		if (data[i] + data[i+1] + data[i+2] > threshold) {
 			data[i] = 255 - data[i];
 			data[i + 1] = 255 - data[i + 1];
 			data[i + 2] = 255 - data[i + 2];
@@ -436,8 +406,7 @@ Image& Image::reversed_black_and_white(const int threshold) {
 Image& Image::alternatelyDarkenAndWhitenBelowTheThreshold(int s, int first_threshold,	int last_threshold) {
 	const int threshold3 = 3 * s;
 	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
-		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb < threshold3) {
+		if (const int rgb = (data[i] + data[i+1] + data[i+2]); rgb < threshold3) {
 			data[i] = data[i + 1] = data[i + 2] = 0;
 		}
 	}
@@ -447,8 +416,7 @@ Image& Image::alternatelyDarkenAndWhitenBelowTheThreshold(int s, int first_thres
 Image& Image::alternatelyDarkenAndWhitenAboveTheThreshold(int s, int first_threshold,	int last_threshold) {
 	const int threshold3 = 3 * s;
 	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
-		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb > threshold3) {
+		if (const int rgb = (data[i] + data[i+1] + data[i+2]); rgb > threshold3) {
 			data[i] = data[i + 1] = data[i + 2] = 0;
 		}
 	}
@@ -458,546 +426,100 @@ Image& Image::alternatelyDarkenAndWhitenAboveTheThreshold(int s, int first_thres
 
 //fraction by rectangles
 
-template<typename ConditionFunc, typename TransformFunc>
-Image& Image::applyThresholdTransformationRegionFraction(
-	int threshold,
-	const int fraction,
-	const std::vector<int>& rectanglesToModify,
-	ConditionFunc condition,
-	TransformFunc transformation
+template<typename TransformFunc>
+Image& Image::apply_proportion_transformation_region_fraction(
+    const float proportion,
+    const int fraction,
+    const std::vector<int>& rectanglesToModify,
+    const bool below,  // true = below, false = above
+    TransformFunc transformation
 ) {
-	if (rectanglesToModify.empty()) return *this;
+    if (rectanglesToModify.empty() || proportion <= 0.0f || proportion >= 1.0f) return *this;
 
-	const int numRectanglesPerRow = 1 << fraction;
-	const int totalRectangles = numRectanglesPerRow * numRectanglesPerRow;
-	const int rectWidth = w / numRectanglesPerRow;
-	const int rectHeight = h / numRectanglesPerRow;
-	const uint8_t transformValue = transformation();
+    const int numRectanglesPerRow = 1 << fraction;
+    const int totalRectangles = numRectanglesPerRow * numRectanglesPerRow;
+    const int rectWidth = w / numRectanglesPerRow;
+    const int rectHeight = h / numRectanglesPerRow;
+    const uint8_t transformValue = transformation();
 
-	for (const int rectIndex : rectanglesToModify) {
-		if (rectIndex < 0 || rectIndex >= totalRectangles) continue;
+    for (const int rectIndex : rectanglesToModify) {
+        if (rectIndex < 0 || rectIndex >= totalRectangles) continue;
 
-		const int rectRow = rectIndex / numRectanglesPerRow;
-		const int rectCol = rectIndex % numRectanglesPerRow;
-		const int startX = rectCol * rectWidth;
-		const int startY = rectRow * rectHeight;
-		const int endX = std::min((rectCol + 1) * rectWidth, w);
-		const int endY = std::min((rectRow + 1) * rectHeight, h);
+        const int rectRow = rectIndex / numRectanglesPerRow;
+        const int rectCol = rectIndex % numRectanglesPerRow;
+        const int startX = rectCol * rectWidth;
+        const int startY = rectRow * rectHeight;
+        const int endX = std::min((rectCol + 1) * rectWidth, w);
+        const int endY = std::min((rectRow + 1) * rectHeight, h);
 
-		for (int y = startY; y < endY; ++y) {
-			const size_t rowOffset = y * w * channels;
-			for (int x = startX; x < endX; ++x) {
-				const size_t i = rowOffset + x * channels;
-				const int rgb = data[i] + data[i + 1] + data[i + 2];
+        const size_t regionPixelCount = (endX - startX) * (endY - startY);
+        std::vector<int> rgbValues(regionPixelCount);
 
-				if (condition(rgb)) {
-					data[i] = data[i + 1] = data[i + 2] = transformValue;
-				}
-			}
-		}
-	}
-	return *this;
-}
+        size_t idx = 0;
+        for (int y = startY; y < endY; ++y) {
+            const size_t rowOffset = y * w * channels;
+            for (int x = startX; x < endX; ++x) {
+                const size_t i = rowOffset + x * channels;
+                rgbValues[idx++] = data[i] + data[i + 1] + data[i + 2];
+            }
+        }
 
-Image& Image::darkenBelowThresholdRegionFraction(
-	int threshold,
-	int cn,
-	const int fraction,
-	const std::vector<int>& rectanglesToModify) {
+        std::vector<int> sortedValues = rgbValues;
+        if (below) {
+            std::ranges::sort(sortedValues);
+        } else {
+            std::ranges::sort(sortedValues, std::greater{});
+        }
+        const int threshold = sortedValues[static_cast<size_t>(static_cast<float>(regionPixelCount) * proportion)];
 
-	return applyThresholdTransformationRegionFraction(
-	   threshold,
-	   fraction,
-	   rectanglesToModify,
-	   [threshold](const int rgb) { return rgb < threshold; },
-	   [cn]() -> uint8_t { return cn; }
-	);
-}
-
-Image& Image::whitenBelowThresholdRegionFraction(
-	int threshold,
-	const int cn,
-	const int fraction,
-	const std::vector<int>& rectanglesToModify) {
-
-	const int newColor = 255 - cn;
-
-		return applyThresholdTransformationRegionFraction(
-		   threshold,
-		   fraction,
-		   rectanglesToModify,
-		   [threshold](const int rgb) { return rgb < threshold; },
-		   [newColor]() -> uint8_t { return newColor; }
-		);
-	}
-
-Image& Image::darkenAboveThresholdRegionFraction(
-	int threshold,
-	const int cn,
-	const int fraction,
-	const std::vector<int>& rectanglesToModify) {
-
-	return applyThresholdTransformationRegionFraction(
-	   threshold,
-	   fraction,
-	   rectanglesToModify,
-	   [threshold](const int rgb) { return rgb > threshold; },
-	   [cn]() -> uint8_t { return cn; }
-	);
-}
-
-Image& Image::whitenAboveThresholdRegionFraction(
-	int threshold,
-	const int cn,
-	const int fraction,
-	const std::vector<int>& rectanglesToModify) {
-
-	const int newColor = 255 - cn;
-
-		return applyThresholdTransformationRegionFraction(
-		   threshold,
-		   fraction,
-		   rectanglesToModify,
-		   [threshold](const int rgb) { return rgb > threshold; },
-		   [newColor]() -> uint8_t { return newColor; }
-		);
-	}
-
-Image& Image::darkenBelowThreshold_ColorNuance_AVX2(const int threshold, const std::uint8_t cn)
-{
-    // Set the constant color value for darkening
-    const __m256i v_cn = _mm256_set1_epi8(static_cast<char>(cn));
-    // Set the threshold value for comparison
-	const __m256i v_th = _mm256_set1_epi8(static_cast<char>(threshold));
-
-    std::uint8_t* p = data;
-    std::uint8_t* end = data + size - 96; // 32 RGB pixels (96 bytes)
-
-    // Process 32 pixels at a time using AVX2
-    for (; p <= end; p += 96)
-    {
-        // Load 96 bytes (32 RGB pixels) into three 256-bit registers
-    	__m256i a = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p));
-    	__m256i b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + 32));
-    	__m256i c = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + 64));
-
-        // Extract R, G, B components for the first 32 bytes (a)
-        __m256i r_a = _mm256_and_si256(a, _mm256_set1_epi32(0xFF));
-        __m256i g_a = _mm256_and_si256(_mm256_srli_epi32(a, 8), _mm256_set1_epi32(0xFF));
-        __m256i b_a = _mm256_and_si256(_mm256_srli_epi32(a, 16), _mm256_set1_epi32(0xFF));
-
-        // Extract R, G, B components for the next 32 bytes (b)
-        __m256i r_b = _mm256_and_si256(b, _mm256_set1_epi32(0xFF));
-        __m256i g_b = _mm256_and_si256(_mm256_srli_epi32(b, 8), _mm256_set1_epi32(0xFF));
-        __m256i b_b = _mm256_and_si256(_mm256_srli_epi32(b, 16), _mm256_set1_epi32(0xFF));
-
-        // Extract R, G, B components for the last 32 bytes (c)
-        __m256i r_c = _mm256_and_si256(c, _mm256_set1_epi32(0xFF));
-        __m256i g_c = _mm256_and_si256(_mm256_srli_epi32(c, 8), _mm256_set1_epi32(0xFF));
-        __m256i b_c = _mm256_and_si256(_mm256_srli_epi32(c, 16), _mm256_set1_epi32(0xFF));
-
-        // Convert R, G, B components to 16-bit for the first 16 pixels (lower 128 bits)
-        __m256i r16_a = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(r_a));
-        __m256i g16_a = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(g_a));
-        __m256i b16_a = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(b_a));
-
-        __m256i r16_b = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(r_b));
-        __m256i g16_b = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(g_b));
-        __m256i b16_b = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(b_b));
-
-        __m256i r16_c = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(r_c));
-        __m256i g16_c = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(g_c));
-        __m256i b16_c = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(b_c));
-
-        // Convert R, G, B components to 16-bit for the next 16 pixels (upper 128 bits)
-        __m256i r16_a_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(r_a, 1));
-        __m256i g16_a_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(g_a, 1));
-        __m256i b16_a_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(b_a, 1));
-
-        __m256i r16_b_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(r_b, 1));
-        __m256i g16_b_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(g_b, 1));
-        __m256i b16_b_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(b_b, 1));
-
-        __m256i r16_c_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(r_c, 1));
-        __m256i g16_c_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(g_c, 1));
-        __m256i b16_c_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(b_c, 1));
-
-    	// Calculate the sum of R + G + B for each group of 16 pixels (unsigned saturated)
-    	__m256i sum_a = _mm256_adds_epu16(_mm256_adds_epu16(r16_a, g16_a), b16_a);
-    	__m256i sum_a_high = _mm256_adds_epu16(_mm256_adds_epu16(r16_a_high, g16_a_high), b16_a_high);
-
-    	__m256i sum_b = _mm256_adds_epu16(_mm256_adds_epu16(r16_b, g16_b), b16_b);
-    	__m256i sum_b_high = _mm256_adds_epu16(_mm256_adds_epu16(r16_b_high, g16_b_high), b16_b_high);
-
-    	__m256i sum_c = _mm256_adds_epu16(_mm256_adds_epu16(r16_c, g16_c), b16_c);
-    	__m256i sum_c_high = _mm256_adds_epu16(_mm256_adds_epu16(r16_c_high, g16_c_high), b16_c_high);
-
-
-        // Compare the sum to the threshold
-        __m256i mask_a = _mm256_cmpgt_epi16(v_th, sum_a);
-        __m256i mask_a_high = _mm256_cmpgt_epi16(v_th, sum_a_high);
-
-        __m256i mask_b = _mm256_cmpgt_epi16(v_th, sum_b);
-        __m256i mask_b_high = _mm256_cmpgt_epi16(v_th, sum_b_high);
-
-        __m256i mask_c = _mm256_cmpgt_epi16(v_th, sum_c);
-        __m256i mask_c_high = _mm256_cmpgt_epi16(v_th, sum_c_high);
-
-        // Combine masks for each register
-        __m256i mask8_a = _mm256_packus_epi16(mask_a, mask_a_high);
-        __m256i mask8_b = _mm256_packus_epi16(mask_b, mask_b_high);
-        __m256i mask8_c = _mm256_packus_epi16(mask_c, mask_c_high);
-
-        // Apply the mask to darken pixels
-        a = _mm256_blendv_epi8(a, v_cn, mask8_a);
-        b = _mm256_blendv_epi8(b, v_cn, mask8_b);
-        c = _mm256_blendv_epi8(c, v_cn, mask8_c);
-
-        // Store the results back to memory
-    	_mm256_storeu_si256(reinterpret_cast<__m256i*>(p), a);
-    	_mm256_storeu_si256(reinterpret_cast<__m256i*>(p + 32), b);
-    	_mm256_storeu_si256(reinterpret_cast<__m256i*>(p + 64), c);
-
-    }
-
-    // Process remaining pixels with a scalar loop
-    for (; p < data + size; p += 3)
-    {
-        if (p[0] + p[1] + p[2] < threshold)
-        {
-            p[0] = p[1] = p[2] = cn;
+        for (int y = startY; y < endY; ++y) {
+            const size_t rowOffset = y * w * channels;
+            for (int x = startX; x < endX; ++x) {
+                const size_t i = rowOffset + x * channels;
+                if (const int rgb = data[i] + data[i + 1] + data[i + 2];
+                	(below && rgb <= threshold) || (!below && rgb >= threshold)) {
+                    data[i] = data[i + 1] = data[i + 2] = transformValue;
+                }
+            }
         }
     }
-
     return *this;
 }
 
-Image& Image::whitenBelowThreshold_ColorNuance_AVX2(const int threshold, const std::uint8_t cn)
-{
-    // Set the constant color value for darkening
-    const __m256i v_cn = _mm256_set1_epi8(static_cast<char>(255 - cn));
-    // Set the threshold value for comparison
-	const __m256i v_th = _mm256_set1_epi8(static_cast<char>(threshold));
+Image& Image::below_proportion_region_fraction(
+    const float proportion,
+    const int cn,
+    const int fraction,
+    const std::vector<int>& rectanglesToModify,
+    const bool useDarkNuance) {
 
-    std::uint8_t* p = data;
-    std::uint8_t* end = data + size - 96; // 32 RGB pixels (96 bytes)
-
-    // Process 32 pixels at a time using AVX2
-    for (; p <= end; p += 96)
-    {
-        // Load 96 bytes (32 RGB pixels) into three 256-bit registers
-    	__m256i a = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p));
-    	__m256i b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + 32));
-    	__m256i c = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + 64));
-
-        // Extract R, G, B components for the first 32 bytes (a)
-        __m256i r_a = _mm256_and_si256(a, _mm256_set1_epi32(0xFF));
-        __m256i g_a = _mm256_and_si256(_mm256_srli_epi32(a, 8), _mm256_set1_epi32(0xFF));
-        __m256i b_a = _mm256_and_si256(_mm256_srli_epi32(a, 16), _mm256_set1_epi32(0xFF));
-
-        // Extract R, G, B components for the next 32 bytes (b)
-        __m256i r_b = _mm256_and_si256(b, _mm256_set1_epi32(0xFF));
-        __m256i g_b = _mm256_and_si256(_mm256_srli_epi32(b, 8), _mm256_set1_epi32(0xFF));
-        __m256i b_b = _mm256_and_si256(_mm256_srli_epi32(b, 16), _mm256_set1_epi32(0xFF));
-
-        // Extract R, G, B components for the last 32 bytes (c)
-        __m256i r_c = _mm256_and_si256(c, _mm256_set1_epi32(0xFF));
-        __m256i g_c = _mm256_and_si256(_mm256_srli_epi32(c, 8), _mm256_set1_epi32(0xFF));
-        __m256i b_c = _mm256_and_si256(_mm256_srli_epi32(c, 16), _mm256_set1_epi32(0xFF));
-
-        // Convert R, G, B components to 16-bit for the first 16 pixels (lower 128 bits)
-        __m256i r16_a = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(r_a));
-        __m256i g16_a = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(g_a));
-        __m256i b16_a = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(b_a));
-
-        __m256i r16_b = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(r_b));
-        __m256i g16_b = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(g_b));
-        __m256i b16_b = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(b_b));
-
-        __m256i r16_c = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(r_c));
-        __m256i g16_c = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(g_c));
-        __m256i b16_c = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(b_c));
-
-        // Convert R, G, B components to 16-bit for the next 16 pixels (upper 128 bits)
-        __m256i r16_a_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(r_a, 1));
-        __m256i g16_a_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(g_a, 1));
-        __m256i b16_a_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(b_a, 1));
-
-        __m256i r16_b_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(r_b, 1));
-        __m256i g16_b_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(g_b, 1));
-        __m256i b16_b_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(b_b, 1));
-
-        __m256i r16_c_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(r_c, 1));
-        __m256i g16_c_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(g_c, 1));
-        __m256i b16_c_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(b_c, 1));
-
-    	// Calculate the sum of R + G + B for each group of 16 pixels (unsigned saturated)
-    	__m256i sum_a = _mm256_adds_epu16(_mm256_adds_epu16(r16_a, g16_a), b16_a);
-    	__m256i sum_a_high = _mm256_adds_epu16(_mm256_adds_epu16(r16_a_high, g16_a_high), b16_a_high);
-
-    	__m256i sum_b = _mm256_adds_epu16(_mm256_adds_epu16(r16_b, g16_b), b16_b);
-    	__m256i sum_b_high = _mm256_adds_epu16(_mm256_adds_epu16(r16_b_high, g16_b_high), b16_b_high);
-
-    	__m256i sum_c = _mm256_adds_epu16(_mm256_adds_epu16(r16_c, g16_c), b16_c);
-    	__m256i sum_c_high = _mm256_adds_epu16(_mm256_adds_epu16(r16_c_high, g16_c_high), b16_c_high);
-
-
-        // Compare the sum to the threshold
-        __m256i mask_a = _mm256_cmpgt_epi16(v_th, sum_a);
-        __m256i mask_a_high = _mm256_cmpgt_epi16(v_th, sum_a_high);
-
-        __m256i mask_b = _mm256_cmpgt_epi16(v_th, sum_b);
-        __m256i mask_b_high = _mm256_cmpgt_epi16(v_th, sum_b_high);
-
-        __m256i mask_c = _mm256_cmpgt_epi16(v_th, sum_c);
-        __m256i mask_c_high = _mm256_cmpgt_epi16(v_th, sum_c_high);
-
-        // Combine masks for each register
-        __m256i mask8_a = _mm256_packus_epi16(mask_a, mask_a_high);
-        __m256i mask8_b = _mm256_packus_epi16(mask_b, mask_b_high);
-        __m256i mask8_c = _mm256_packus_epi16(mask_c, mask_c_high);
-
-        // Apply the mask to whiten pixels
-        a = _mm256_blendv_epi8(a, v_cn, mask8_a);
-        b = _mm256_blendv_epi8(b, v_cn, mask8_b);
-        c = _mm256_blendv_epi8(c, v_cn, mask8_c);
-
-        // Store the results back to memory
-    	_mm256_storeu_si256(reinterpret_cast<__m256i*>(p), a);
-    	_mm256_storeu_si256(reinterpret_cast<__m256i*>(p + 32), b);
-    	_mm256_storeu_si256(reinterpret_cast<__m256i*>(p + 64), c);
-
-    }
-
-    // Process remaining pixels with a scalar loop
-    for (; p < data + size; p += 3)
-    {
-        if (p[0] + p[1] + p[2] < threshold)
-        {
-            p[0] = p[1] = p[2] = 255 - cn;
-        }
-    }
-
-    return *this;
+    const int newColor = useDarkNuance ? cn : 255 - cn;
+    return apply_proportion_transformation_region_fraction(
+        proportion,
+        fraction,
+        rectanglesToModify,
+        true,  // below
+        [newColor]() -> uint8_t { return newColor; }
+    );
 }
 
-Image& Image::darkenAboveThreshold_ColorNuance_AVX2(const int threshold, const std::uint8_t cn)
-{
-    // Set the constant color value for darkening
-    const __m256i v_cn = _mm256_set1_epi8(static_cast<char>(cn));
-    // Set the threshold value for comparison
-	const __m256i v_th = _mm256_set1_epi8(static_cast<char>(threshold));
+Image& Image::above_proportion_region_fraction(
+    const float proportion,
+    const int cn,
+    const int fraction,
+    const std::vector<int>& rectanglesToModify,
+    const bool useDarkNuance) {
 
-    std::uint8_t* p = data;
-    std::uint8_t* end = data + size - 96; // 32 RGB pixels (96 bytes)
-
-    // Process 32 pixels at a time using AVX2
-    for (; p <= end; p += 96)
-    {
-        // Load 96 bytes (32 RGB pixels) into three 256-bit registers
-    	__m256i a = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p));
-    	__m256i b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + 32));
-    	__m256i c = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + 64));
-
-        // Extract R, G, B components for the first 32 bytes (a)
-        __m256i r_a = _mm256_and_si256(a, _mm256_set1_epi32(0xFF));
-        __m256i g_a = _mm256_and_si256(_mm256_srli_epi32(a, 8), _mm256_set1_epi32(0xFF));
-        __m256i b_a = _mm256_and_si256(_mm256_srli_epi32(a, 16), _mm256_set1_epi32(0xFF));
-
-        // Extract R, G, B components for the next 32 bytes (b)
-        __m256i r_b = _mm256_and_si256(b, _mm256_set1_epi32(0xFF));
-        __m256i g_b = _mm256_and_si256(_mm256_srli_epi32(b, 8), _mm256_set1_epi32(0xFF));
-        __m256i b_b = _mm256_and_si256(_mm256_srli_epi32(b, 16), _mm256_set1_epi32(0xFF));
-
-        // Extract R, G, B components for the last 32 bytes (c)
-        __m256i r_c = _mm256_and_si256(c, _mm256_set1_epi32(0xFF));
-        __m256i g_c = _mm256_and_si256(_mm256_srli_epi32(c, 8), _mm256_set1_epi32(0xFF));
-        __m256i b_c = _mm256_and_si256(_mm256_srli_epi32(c, 16), _mm256_set1_epi32(0xFF));
-
-        // Convert R, G, B components to 16-bit for the first 16 pixels (lower 128 bits)
-        __m256i r16_a = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(r_a));
-        __m256i g16_a = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(g_a));
-        __m256i b16_a = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(b_a));
-
-        __m256i r16_b = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(r_b));
-        __m256i g16_b = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(g_b));
-        __m256i b16_b = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(b_b));
-
-        __m256i r16_c = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(r_c));
-        __m256i g16_c = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(g_c));
-        __m256i b16_c = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(b_c));
-
-        // Convert R, G, B components to 16-bit for the next 16 pixels (upper 128 bits)
-        __m256i r16_a_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(r_a, 1));
-        __m256i g16_a_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(g_a, 1));
-        __m256i b16_a_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(b_a, 1));
-
-        __m256i r16_b_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(r_b, 1));
-        __m256i g16_b_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(g_b, 1));
-        __m256i b16_b_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(b_b, 1));
-
-        __m256i r16_c_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(r_c, 1));
-        __m256i g16_c_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(g_c, 1));
-        __m256i b16_c_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(b_c, 1));
-
-    	// Calculate the sum of R + G + B for each group of 16 pixels (unsigned saturated)
-    	__m256i sum_a = _mm256_adds_epu16(_mm256_adds_epu16(r16_a, g16_a), b16_a);
-    	__m256i sum_a_high = _mm256_adds_epu16(_mm256_adds_epu16(r16_a_high, g16_a_high), b16_a_high);
-
-    	__m256i sum_b = _mm256_adds_epu16(_mm256_adds_epu16(r16_b, g16_b), b16_b);
-    	__m256i sum_b_high = _mm256_adds_epu16(_mm256_adds_epu16(r16_b_high, g16_b_high), b16_b_high);
-
-    	__m256i sum_c = _mm256_adds_epu16(_mm256_adds_epu16(r16_c, g16_c), b16_c);
-    	__m256i sum_c_high = _mm256_adds_epu16(_mm256_adds_epu16(r16_c_high, g16_c_high), b16_c_high);
-
-
-        // Compare the sum to the threshold
-    	__m256i mask_a = _mm256_cmpgt_epi16(sum_a, v_th);  // sum > threshold
-    	__m256i mask_a_high = _mm256_cmpgt_epi16(sum_a_high, v_th);
-
-        __m256i mask_b = _mm256_cmpgt_epi16(sum_b, v_th);
-        __m256i mask_b_high = _mm256_cmpgt_epi16(sum_b_high, v_th);
-
-        __m256i mask_c = _mm256_cmpgt_epi16(sum_c, v_th);
-        __m256i mask_c_high = _mm256_cmpgt_epi16(sum_c_high, v_th);
-
-        // Combine masks for each register
-        __m256i mask8_a = _mm256_packus_epi16(mask_a, mask_a_high);
-        __m256i mask8_b = _mm256_packus_epi16(mask_b, mask_b_high);
-        __m256i mask8_c = _mm256_packus_epi16(mask_c, mask_c_high);
-
-        // Apply the mask to darken pixels
-        a = _mm256_blendv_epi8(a, v_cn, mask8_a);
-        b = _mm256_blendv_epi8(b, v_cn, mask8_b);
-        c = _mm256_blendv_epi8(c, v_cn, mask8_c);
-
-        // Store the results back to memory
-    	_mm256_storeu_si256(reinterpret_cast<__m256i*>(p), a);
-    	_mm256_storeu_si256(reinterpret_cast<__m256i*>(p + 32), b);
-    	_mm256_storeu_si256(reinterpret_cast<__m256i*>(p + 64), c);
-
-    }
-
-    // Process remaining pixels with a scalar loop
-    for (; p < data + size; p += 3)
-    {
-        if (p[0] + p[1] + p[2] > threshold)
-        {
-            p[0] = p[1] = p[2] = cn;
-        }
-    }
-
-    return *this;
+    const int newColor = useDarkNuance ? cn : 255 - cn;
+    return apply_proportion_transformation_region_fraction(
+        proportion,
+        fraction,
+        rectanglesToModify,
+        false,  // above
+        [newColor]() -> uint8_t { return newColor; }
+    );
 }
 
-Image& Image::whitenAboveThreshold_ColorNuance_AVX2(const int threshold, const std::uint8_t cn)
-{
-    // Set the constant color value for darkening
-    const __m256i v_cn = _mm256_set1_epi8(static_cast<char>(255 - cn));
-    // Set the threshold value for comparison
-	const __m256i v_th = _mm256_set1_epi8(static_cast<char>(threshold));
-
-    std::uint8_t* p = data;
-    std::uint8_t* end = data + size - 96; // 32 RGB pixels (96 bytes)
-
-    // Process 32 pixels at a time using AVX2
-    for (; p <= end; p += 96)
-    {
-        // Load 96 bytes (32 RGB pixels) into three 256-bit registers
-    	__m256i a = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p));
-    	__m256i b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + 32));
-    	__m256i c = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + 64));
-
-        // Extract R, G, B components for the first 32 bytes (a)
-        __m256i r_a = _mm256_and_si256(a, _mm256_set1_epi32(0xFF));
-        __m256i g_a = _mm256_and_si256(_mm256_srli_epi32(a, 8), _mm256_set1_epi32(0xFF));
-        __m256i b_a = _mm256_and_si256(_mm256_srli_epi32(a, 16), _mm256_set1_epi32(0xFF));
-
-        // Extract R, G, B components for the next 32 bytes (b)
-        __m256i r_b = _mm256_and_si256(b, _mm256_set1_epi32(0xFF));
-        __m256i g_b = _mm256_and_si256(_mm256_srli_epi32(b, 8), _mm256_set1_epi32(0xFF));
-        __m256i b_b = _mm256_and_si256(_mm256_srli_epi32(b, 16), _mm256_set1_epi32(0xFF));
-
-        // Extract R, G, B components for the last 32 bytes (c)
-        __m256i r_c = _mm256_and_si256(c, _mm256_set1_epi32(0xFF));
-        __m256i g_c = _mm256_and_si256(_mm256_srli_epi32(c, 8), _mm256_set1_epi32(0xFF));
-        __m256i b_c = _mm256_and_si256(_mm256_srli_epi32(c, 16), _mm256_set1_epi32(0xFF));
-
-        // Convert R, G, B components to 16-bit for the first 16 pixels (lower 128 bits)
-        __m256i r16_a = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(r_a));
-        __m256i g16_a = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(g_a));
-        __m256i b16_a = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(b_a));
-
-        __m256i r16_b = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(r_b));
-        __m256i g16_b = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(g_b));
-        __m256i b16_b = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(b_b));
-
-        __m256i r16_c = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(r_c));
-        __m256i g16_c = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(g_c));
-        __m256i b16_c = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(b_c));
-
-        // Convert R, G, B components to 16-bit for the next 16 pixels (upper 128 bits)
-        __m256i r16_a_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(r_a, 1));
-        __m256i g16_a_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(g_a, 1));
-        __m256i b16_a_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(b_a, 1));
-
-        __m256i r16_b_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(r_b, 1));
-        __m256i g16_b_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(g_b, 1));
-        __m256i b16_b_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(b_b, 1));
-
-        __m256i r16_c_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(r_c, 1));
-        __m256i g16_c_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(g_c, 1));
-        __m256i b16_c_high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(b_c, 1));
-
-    	// Calculate the sum of R + G + B for each group of 16 pixels (unsigned saturated)
-    	__m256i sum_a = _mm256_adds_epu16(_mm256_adds_epu16(r16_a, g16_a), b16_a);
-    	__m256i sum_a_high = _mm256_adds_epu16(_mm256_adds_epu16(r16_a_high, g16_a_high), b16_a_high);
-
-    	__m256i sum_b = _mm256_adds_epu16(_mm256_adds_epu16(r16_b, g16_b), b16_b);
-    	__m256i sum_b_high = _mm256_adds_epu16(_mm256_adds_epu16(r16_b_high, g16_b_high), b16_b_high);
-
-    	__m256i sum_c = _mm256_adds_epu16(_mm256_adds_epu16(r16_c, g16_c), b16_c);
-    	__m256i sum_c_high = _mm256_adds_epu16(_mm256_adds_epu16(r16_c_high, g16_c_high), b16_c_high);
-
-
-        // Compare the sum to the threshold
-        __m256i mask_a = _mm256_cmpgt_epi16(sum_a, v_th);
-        __m256i mask_a_high = _mm256_cmpgt_epi16(sum_a_high, v_th);
-
-        __m256i mask_b = _mm256_cmpgt_epi16(sum_b, v_th);
-        __m256i mask_b_high = _mm256_cmpgt_epi16(sum_b_high, v_th);
-
-        __m256i mask_c = _mm256_cmpgt_epi16(sum_c, v_th);
-        __m256i mask_c_high = _mm256_cmpgt_epi16(sum_c_high, v_th);
-
-        // Combine masks for each register
-        __m256i mask8_a = _mm256_packus_epi16(mask_a, mask_a_high);
-        __m256i mask8_b = _mm256_packus_epi16(mask_b, mask_b_high);
-        __m256i mask8_c = _mm256_packus_epi16(mask_c, mask_c_high);
-
-        // Apply the mask to whiten pixels
-        a = _mm256_blendv_epi8(a, v_cn, mask8_a);
-        b = _mm256_blendv_epi8(b, v_cn, mask8_b);
-        c = _mm256_blendv_epi8(c, v_cn, mask8_c);
-
-        // Store the results back to memory
-    	_mm256_storeu_si256(reinterpret_cast<__m256i*>(p), a);
-    	_mm256_storeu_si256(reinterpret_cast<__m256i*>(p + 32), b);
-    	_mm256_storeu_si256(reinterpret_cast<__m256i*>(p + 64), c);
-
-    }
-
-    // Process remaining pixels with a scalar loop
-    for (; p < data + size; p += 3)
-    {
-        if (p[0] + p[1] + p[2] > threshold)
-        {
-            p[0] = p[1] = p[2] = 255 - cn;
-        }
-    }
-
-    return *this;
-}
 
 Image& Image::operator=(const Image& img) {
 	if (this == &img) {
@@ -1463,8 +985,9 @@ Image& Image::diffmap_scale(Image& img, uint8_t scl) {
 	for(uint32_t i=0; i<compare_height; ++i) {
 		for(uint32_t j=0; j<compare_width; ++j) {
 			for(uint8_t k=0; k<compare_channels; ++k) {
-				data[(i*w+j)*channels+k] = BYTE_BOUND(abs(data[(i*w+j)*channels+k] - img.data[(i*img.w+j)*img.channels+k]));
-				largest = fmax(largest, data[(i*w+j)*channels+k]);
+				data[(i*w+j)*channels+k] = BYTE_BOUND(abs(data[(i*w+j)*channels+k] -
+					img.data[(i*img.w+j)*img.channels+k]));
+				largest = std::max(largest, data[(i*w+j)*channels+k]);
 			}
 		}
 	}
@@ -1517,7 +1040,7 @@ Image& Image::color_mask(const float r, const float g, const float b) {
 }
 
 
-Image& Image::encodeMessage(const char* message) {
+Image& Image::encode_message(const char* message) {
 	const uint32_t len = strlen(message) * 8;
 	if(len + STEG_HEADER_SIZE > size) {
 		printf("\e[31m[ERROR] This message is too large (%lu bits / %zu bits)\e[0m\n", len+STEG_HEADER_SIZE, size);
@@ -1537,7 +1060,7 @@ Image& Image::encodeMessage(const char* message) {
 	return *this;
 }
 
-Image& Image::decodeMessage(char* buffer, size_t* messageLength) {
+Image& Image::decode_message(char* buffer, size_t* messageLength) {
 	constexpr uint32_t len = 0;
 	for(size_t i = 0; i < STEG_HEADER_SIZE; ++i) {
 		data[i] &= 0xFE;
@@ -1614,9 +1137,8 @@ Image& Image::overlay(const Image& source, const int x, const int y) {
 					std::fill(dstPx, dstPx + channels, srcPx[0]);
 				}
 			} else {
-				float outAlpha = srcAlpha + dstAlpha * (1.0f - srcAlpha);
-				if (outAlpha < 0.01f) {
-					std::fill(dstPx, dstPx + channels, 0);
+				if (float outAlpha = srcAlpha + dstAlpha * (1.0f - srcAlpha); outAlpha < 0.01f) {
+					std::fill_n(dstPx, channels, 0);
 				} else {
 					for (int chnl = 0; chnl < channels; ++chnl) {
 						dstPx[chnl] = static_cast<uint8_t>(
@@ -1675,9 +1197,9 @@ Image& Image::resizeNN(const uint16_t nw, const uint16_t nh) {
 	const float scaleY = static_cast<float>(nh) / static_cast<float>(h);
 
 	for(uint16_t y = 0; y < nh; ++y) {
-		const auto sy = static_cast<uint16_t>(std::round(y / scaleY));
+		const auto sy = static_cast<uint16_t>(std::round(static_cast<float>(y) / scaleY));
 		for(uint16_t x = 0; x < nw; ++x) {
-			const auto sx = static_cast<uint16_t>(std::round(x / scaleX));
+			const auto sx = static_cast<uint16_t>(std::round(static_cast<float>(x) / scaleX));
 
 
 			memcpy(&newImage[(x + y * nw) * channels], &data[(sx + sy * w) * channels], channels);
