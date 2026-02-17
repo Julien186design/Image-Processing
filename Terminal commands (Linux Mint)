@@ -4,31 +4,34 @@ pngcrush -ow image.png
 Compressing all PNG images whose name contains "223 - Average 1" and end by ".png".
 for file in "223 - Average 1"*.png; do pngcrush -ow "$file"; done
 
-Compressing all PNG images whose size is greater than 16 Mo.
-find . -maxdepth 1 -type f -name '*.png' -size +16M -exec pngcrush -ow {} \;
-
 Compressing all MP4 videos whose name begins by "75".
 find . -maxdepth 1 -type f -name '75*.mp4'  -exec sh -c 'ffmpeg -y -i "$1" -c:v libx264 -crf 23 -c:a aac -b:a 128k "${1%.mp4}_compressed.mp4"' sh {} \;
 
-Deleting all files in a folder (subfolders included).
-find . -type f -delete
-
-Getting all files whose name begis by 623 and contains "rage 0" and " 1.00-" | Display the number of files.
-find . -type f -name "623*rage 0* 1.00-*" | awk '{print; c++} END{print c " files"}'
-
-Getting all unique filenames in the "One Color" folder by cutting after "- Tolerance". Delete "Output/One Color" to run in the current folder.
-find "Output/One Color" -type f   -printf '%f\n' | sed 's/ - Tolerance.*//' | sort -u
-
-Getting all unique filenames whose name contains "CN 40" | display names truncated from "TB".
-find -type f -name "*CN 40*" -printf '%f\n' | sed 's/TB.*//' | sort -u
-
-Getting the names of the 20 largest files (useful to launch in the "Output" folder if processing time is getting important).
-find . -type f -exec du -h {} + | sort --human-numeric-sort --reverse | head -n 20
+Compressing all PNG images whose size is greater than 16 Mo.
+find . -maxdepth 1 -type f -name '*.png' -size +16M -exec pngcrush -ow {} \;
 
 Getting the number of frames in the file "video"
 ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=nb_read_frames -of csv=p=0 video.mp4
 
-Getting the list of MP4 files, including subfolders
+Listing the subfolders of "Input" and "Output"
+for dir in Input Output; do echo "=== $dir ==="; tree -d "$dir"; echo; done
+
+Deleting all files in a folder (subfolders included).
+find . -type f -delete
+
+Listing files whose name begis by 623 and contains "rage 0" and " 1.00-" | Display the number of files.
+find . -type f -name "623*rage 0* 1.00-*" | awk '{print; c++} END{print c " files"}'
+
+Listing unique filenames in the "One Color" folder by cutting after "- Tolerance". Delete "Output/One Color" to run in the current folder.
+find "Output/One Color" -type f   -printf '%f\n' | sed 's/ - Tolerance.*//' | sort -u
+
+Listing unique filenames whose name contains "CN 40" | display names truncated from "TB".
+find -type f -name "*CN 40*" -printf '%f\n' | sed 's/TB.*//' | sort -u
+
+Listing the 20 largest files (useful to launch in the "Output" folder if processing time is getting important).
+find . -type f -exec du -h {} + | sort --human-numeric-sort --reverse | head -n 20
+
+Listing MP4 files, including subfolders
 find . -type f \( -iname "*.mp4" \) -printf "%P\n"
 
 Renaming all files whose name begin by "ABC-" to delete the first 4 characters ("ABC-" is for the example).
