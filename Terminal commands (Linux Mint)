@@ -10,6 +10,9 @@ find . -maxdepth 1 -type f -name '75*.mp4'  -exec sh -c 'ffmpeg -y -i "$1" -c:v 
 Compressing all PNG images whose size is greater than 16 Mo.
 find . -maxdepth 1 -type f -name '*.png' -size +16M -exec pngcrush -ow {} \;
 
+Deleting files whose name contains "Tolerance 1".
+rm *"Tolerance 1"*
+
 Getting the number of frames in the file "video"
 ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=nb_read_frames -of csv=p=0 video.mp4
 
