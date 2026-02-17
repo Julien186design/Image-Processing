@@ -1,7 +1,6 @@
 #ifndef IMAGE_H
 #define IMAGE_H
 
-#include <cstdint>
 #include <cstdio>
 #include <complex>
 #include <vector>
@@ -19,7 +18,6 @@
 
 
 #define STEG_HEADER_SIZE sizeof(uint32_t) * 8
-
 
 enum ImageType {
 	PNG, JPG, BMP, TGA
@@ -118,19 +116,12 @@ struct Image {
 	Image& diffmap(const Image& img);
 	Image& diffmap_scale(Image& img, uint8_t scl = 0);
 
-
 	Image& grayscale_avg();
 
-	Image& below_threshold(int threshold, int cn, bool useDarkNuance);
-	Image& aboveThreshold(int threshold, int cn, bool useDarkNuance);
-	Image& belowProportion(float proportion, int cn, bool useDarkNuance);
-	Image& aboveProportion(float proportion, int cn, bool useDarkNuance);
+	Image& below_proportion(float proportion, int cn, bool useDarkNuance);
+	Image& above_proportion(float proportion, int cn, bool useDarkNuance);
 
-	Image& darkenBelowThreshold_ColorNuance_AVX2(int threshold, uint8_t cn);
-	Image& whitenBelowThreshold_ColorNuance_AVX2(int threshold, uint8_t cn);
-	Image& darkenAboveThreshold_ColorNuance_AVX2(int threshold, uint8_t cn);
-	Image& whitenAboveThreshold_ColorNuance_AVX2(int threshold, uint8_t cn);
-
+	Image& threshold_by_proportion(float proportion, int cn, bool useDarkNuance, bool below);
 
 	Image& reverseBelowThreshold(int threshold);
 	Image& reverseAboveThreshold(int threshold);
@@ -154,32 +145,27 @@ struct Image {
 			uint8_t r_half, uint8_t g_half, uint8_t b_half,
 			uint8_t r_full, uint8_t g_full, uint8_t b_full);
 
-	template<typename ConditionFunc, typename TransformFunc>
-	Image& applyThresholdTransformationRegionFraction(
-		int threshold,
+
+	template<typename TransformFunc>
+	Image& apply_proportion_transformation_region_fraction(
+		float proportion,
 		int fraction,
 		const std::vector<int>& rectanglesToModify,
-		ConditionFunc condition,
+		bool below,
 		TransformFunc transformation
 	);
 
-	Image& darkenBelowThresholdRegionFraction(int threshold, int cn, int fraction,
-		const std::vector<int>& rectanglesToModify);
-	Image& whitenBelowThresholdRegionFraction(int threshold, int cn, int fraction,
-		const std::vector<int>& rectanglesToModify);
-	Image& darkenAboveThresholdRegionFraction(int threshold, int cn, int fraction,
-		const std::vector<int>& rectanglesToModify);
-	Image& whitenAboveThresholdRegionFraction(int threshold, int cn, int fraction,
-		const std::vector<int>& rectanglesToModify);
-
+	Image& below_proportion_region_fraction(float proportion, int cn, int fraction,
+	const std::vector<int>& rectanglesToModify, bool useDarkNuance);
+	Image& above_proportion_region_fraction(float proportion, int cn, int fraction,
+		const std::vector<int>& rectanglesToModify, bool useDarkNuance);
 
 	Image& grayscale_lum();
 
 	Image& color_mask(float r, float g, float b);
 
-
-	Image& encodeMessage(const char* message);
-	Image& decodeMessage(char* buffer, size_t* messageLength);
+	Image& encode_message(const char* message);
+	Image& decode_message(char* buffer, size_t* messageLength);
 
 	Image& flipX();
 	Image& flipY();
@@ -187,7 +173,6 @@ struct Image {
 	Image& overlay(const Image& source, int x, int y);
 
 	Image& overlayText(const char* txt, const Font& font, int x, int y, uint8_t r = 255, uint8_t g = 255, uint8_t b = 255, uint8_t a = 255);
-
 
 	Image& crop(uint16_t cx, uint16_t cy, uint16_t cw, uint16_t ch);
 
@@ -205,116 +190,165 @@ private:
     const size_t imgSize;
     const double threshold;
 
-    // Gaussian kernel
+    // 3x3 Gaussian kernel (normalized by 1/16)
     static constexpr double inv16 = 1.0 / 16.0;
     double gaussKernel[9] = {
-        inv16, 2*inv16, inv16,
-        2*inv16, 4*inv16, 2*inv16,
-        inv16, 2*inv16, inv16
+        inv16, 2 * inv16, inv16,
+        2 * inv16, 4 * inv16, 2 * inv16,
+        inv16, 2 * inv16, inv16
     };
 
-    // Double buffers
+    // Internal working buffers (allocated once)
     std::vector<double> blurData;
     std::vector<double> tx, ty;
     std::vector<double> gx, gy;
     std::vector<double> g, theta;
     std::vector<uint8_t> outputRGB;
 
-    // ========== CHANGE: Persistent Image buffer to avoid per-frame allocation ==========
-    Image tempImg;  // Allocated once in constructor, reused across all frames
+    // Persistent grayscale image buffer (avoids per-frame allocation)
+    Image tempImg;
 
 public:
-    // ========== CHANGE: Initialize tempImg(w, h, 1) in initializer list ==========
-    EdgeDetectorPipeline(const int w, const int h, const double thresh = 0.09)
-        : width(w), height(h), imgSize(w * h), threshold(thresh),
-          blurData(imgSize, 0.0), tx(imgSize, 0.0), ty(imgSize, 0.0),
-          gx(imgSize, 0.0), gy(imgSize, 0.0), g(imgSize, 0.0), theta(imgSize, 0.0),
-          outputRGB(imgSize * 3, 0),
-          tempImg(w, h, 1) {}  // Single allocation for all frames
 
-    const std::vector<uint8_t>& process(const uint8_t* grayData) {
-        // ========== CHANGE: Direct copy to persistent tempImg.data (no intermediate conversion) ==========
-        // 1. Copy grayscale data directly to tempImg buffer
+    // Constructor: allocate all buffers once
+    EdgeDetectorPipeline(int w, int h, double thresh = 0.09)
+        : width(w),
+          height(h),
+          imgSize(static_cast<size_t>(w) * h),
+          threshold(thresh),
+          blurData(imgSize),
+          tx(imgSize),
+          ty(imgSize),
+          gx(imgSize),
+          gy(imgSize),
+          g(imgSize),
+          theta(imgSize),
+          outputRGB(imgSize * 3),
+          tempImg(w, h, 1)
+    {}
+
+    const std::vector<uint8_t>& process(const uint8_t* grayData)
+    {
+        // Copy grayscale input into persistent image buffer
         std::memcpy(tempImg.data, grayData, imgSize);
 
-        // 2. Gaussian convolution (operates on tempImg.data in-place)
+        // Apply Gaussian blur in-place
         tempImg.convolve_linear(0, 3, 3, gaussKernel, 1, 1);
 
-        // 3. Convert blurred result to double precision
-        for (size_t k = 0; k < imgSize; ++k) {
+        // -------------------------
+        // Stage 1: Normalize to double
+        // -------------------------
+        #pragma omp parallel for schedule(static)
+        for (size_t k = 0; k < imgSize; ++k)
             blurData[k] = tempImg.data[k] / 255.0;
-        }
 
-        // 4. Compute tx/ty (separable convolution, horizontal axis)
-        for (uint32_t r = 0; r < height; ++r) {
-            for (uint32_t c = 1; c < width - 1; ++c) {
-                const size_t idx = r * width + c;
+        // -------------------------
+        // Stage 2: Horizontal derivative pass
+        // -------------------------
+        #pragma omp parallel for collapse(2) schedule(static)
+        for (int r = 0; r < height; ++r)
+        {
+            for (int c = 1; c < width - 1; ++c)
+            {
+                size_t idx = static_cast<size_t>(r) * width + c;
+
                 tx[idx] = blurData[idx + 1] - blurData[idx - 1];
-                ty[idx] = 47.0 * blurData[idx + 1] + 162.0 * blurData[idx] + 47.0 * blurData[idx - 1];
+
+                ty[idx] = 47.0 * blurData[idx + 1]
+                        + 162.0 * blurData[idx]
+                        + 47.0 * blurData[idx - 1];
             }
         }
 
-        // 5. Compute gx/gy (separable convolution, vertical axis)
-        for (uint32_t c = 1; c < width - 1; ++c) {
-            for (uint32_t r = 1; r < height - 1; ++r) {
-                size_t idx = r * width + c;
-                gx[idx] = 47.0 * tx[(r + 1) * width + c] + 162.0 * tx[r * width + c] + 47.0 * tx[(r - 1) * width + c];
-                gy[idx] = ty[(r + 1) * width + c] - ty[(r - 1) * width + c];
+        // -------------------------
+        // Stage 3: Vertical derivative pass
+        // -------------------------
+        #pragma omp parallel for collapse(2) schedule(static)
+        for (int c = 1; c < width - 1; ++c)
+        {
+            for (int r = 1; r < height - 1; ++r)
+            {
+                size_t idx = static_cast<size_t>(r) * width + c;
+
+                gx[idx] = 47.0 * tx[(r + 1) * width + c]
+                        + 162.0 * tx[r * width + c]
+                        + 47.0 * tx[(r - 1) * width + c];
+
+                gy[idx] = ty[(r + 1) * width + c]
+                        - ty[(r - 1) * width + c];
             }
         }
 
-        // 6. Compute gradient magnitude and orientation
-        for (size_t k = 0; k < imgSize; ++k) {
-            g[k] = sqrt(gx[k] * gx[k] + gy[k] * gy[k]);
-            theta[k] = atan2(gy[k], gx[k]);
+        // -------------------------
+        // Stage 4: Gradient magnitude and orientation
+        // -------------------------
+        #pragma omp parallel for schedule(static)
+        for (size_t k = 0; k < imgSize; ++k)
+        {
+            g[k] = std::sqrt(gx[k] * gx[k] + gy[k] * gy[k]);
+            theta[k] = std::atan2(gy[k], gx[k]);
         }
 
-        // 7. Normalize and apply threshold
-    	double mx = -std::numeric_limits<double>::infinity();
-    	// used to be double mx = -INFINITY;
-    	// update deleted waning "Clang-Tidy: Narrowing conversion from constant 'float' to 'double'"
-        double mn = INFINITY;
-        for (size_t k = 0; k < imgSize; ++k) {
-            if (g[k] > mx) mx = g[k];
-            if (g[k] < mn) mn = g[k];
+        // -------------------------
+        // Stage 5: Parallel min/max reduction (portable version)
+        // -------------------------
+        double mx = -std::numeric_limits<double>::infinity();
+        double mn =  std::numeric_limits<double>::infinity();
+
+        #pragma omp parallel
+        {
+            double local_max = -std::numeric_limits<double>::infinity();
+            double local_min =  std::numeric_limits<double>::infinity();
+
+            #pragma omp for nowait
+            for (size_t k = 0; k < imgSize; ++k)
+            {
+                if (g[k] > local_max) local_max = g[k];
+                if (g[k] < local_min) local_min = g[k];
+            }
+
+            #pragma omp critical
+            {
+                if (local_max > mx) mx = local_max;
+                if (local_min < mn) mn = local_min;
+            }
         }
 
-        // 8. Convert HSL→RGB
-        for (size_t k = 0; k < imgSize; ++k) {
+        // -------------------------
+        // Stage 6: HSL → RGB mapping
+        // -------------------------
+        #pragma omp parallel for schedule(static)
+        for (size_t k = 0; k < imgSize; ++k)
+        {
             double h = theta[k] * 180.0 / M_PI + 180.0;
             double v = (mx == mn) ? 0.0 : (g[k] - mn) / (mx - mn);
             v = (v > threshold) ? v : 0.0;
+
             double s = v;
             double l = v;
 
-            // HSL → RGB conversion
-            double c = (1 - fabs(2 * l - 1)) * s;
-            double x = c * (1 - fabs(fmod(h / 60.0, 2) - 1));
+            double c = (1.0 - std::fabs(2.0 * l - 1.0)) * s;
+            double x = c * (1.0 - std::fabs(std::fmod(h / 60.0, 2.0) - 1.0));
             double m = l - c / 2.0;
 
-            double rt = 0, gt = 0, bt = 0;
-            if (h < 60) {
-                rt = c; gt = x;
-            } else if (h < 120) {
-                rt = x; gt = c;
-            } else if (h < 180) {
-                gt = c; bt = x;
-            } else if (h < 240) {
-                gt = x; bt = c;
-            } else if (h < 300) {
-                bt = c; rt = x;
-            } else {
-                bt = x; rt = c;
-            }
+            double rt = 0.0, gt = 0.0, bt = 0.0;
 
-            outputRGB[k * 3]     = static_cast<uint8_t>(255 * (rt + m));
-            outputRGB[k * 3 + 1] = static_cast<uint8_t>(255 * (gt + m));
-            outputRGB[k * 3 + 2] = static_cast<uint8_t>(255 * (bt + m));
+            if      (h < 60.0)  { rt = c; gt = x; }
+            else if (h < 120.0) { rt = x; gt = c; }
+            else if (h < 180.0) { gt = c; bt = x; }
+            else if (h < 240.0) { gt = x; bt = c; }
+            else if (h < 300.0) { bt = c; rt = x; }
+            else                { bt = x; rt = c; }
+
+            outputRGB[k * 3    ] = static_cast<uint8_t>(255.0 * (rt + m));
+            outputRGB[k * 3 + 1] = static_cast<uint8_t>(255.0 * (gt + m));
+            outputRGB[k * 3 + 2] = static_cast<uint8_t>(255.0 * (bt + m));
         }
 
         return outputRGB;
     }
 };
+
 
 
 struct ImageInfo {
@@ -325,7 +359,7 @@ struct ImageInfo {
 
 struct Font {
 	SFT sft = {nullptr, 12, 12, 0, 0, SFT_DOWNWARD_Y|SFT_RENDER_IMAGE};
-	Font(const char* fontfile, uint16_t size) {
+	Font(const char* fontfile, const uint16_t size) {
 		if((sft.font = sft_loadfile(fontfile)) == NULL) {
 			printf("\e[31m[ERROR] Failed to load %s\e[0m\n", fontfile);
 			return;
@@ -342,19 +376,20 @@ struct Font {
 };
 
 inline ImageInfo extractImageInfo(const std::string& inputFile) {
-
-	const size_t dotPos   = inputFile.find_last_of('.');
+	const size_t dotPos = inputFile.find_last_of('.');
 	const size_t slashPos = inputFile.find_last_of('/');
 
-	const std::string folderName = inputFile.substr(0, slashPos);
-
-	const std::string baseName =
-	inputFile.substr(slashPos + 1, dotPos - (slashPos + 1));
+	std::string baseName;
+	if (slashPos == std::string::npos) {
+		baseName = inputFile.substr(0, dotPos);
+	} else {
+		baseName = inputFile.substr(slashPos + 1, dotPos - (slashPos + 1));
+	}
 
 	const std::string inputPath = "Input/" + inputFile;
-
 	return {baseName, inputPath};
 }
+
 
 EdgeDetectorResult process_edge_detection_core(
 	const uint8_t* grayData,
