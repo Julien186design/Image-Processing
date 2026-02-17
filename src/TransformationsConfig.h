@@ -1,10 +1,12 @@
 #pragma once
 
+// Define THREAD_OFFSET according to your needs
+#define THREAD_OFFSET 1  // Example: use all threads minus 1
+
 #include <vector>
 #include <string>
 #include <functional>
 #include <algorithm>
-#include <cstdint>
 
 #include "Image.h"
 
@@ -12,63 +14,47 @@ using TransformationFunc = std::function<void(Image&, int)>;
 using ReverseTransformationFunc = std::function<void(Image&, int)>;
 using AlternatingTransformation = std::function<void(Image&, int, int, int)>;
 using PartialTransformationFunc = std::function<void(Image&, int, int, int, const std::vector<int>&)>;
+using PartialTransformationFuncByProportion =
+    std::function<void(Image&, float, int, int, const std::vector<int>&)>;
 
 using TwoIntTransformationByThreshold = std::function<void(Image&, int, int)>;
 using TwoIntTransformationByProportion = std::function<void(Image&, float, int)>;
-using TwoIntTransformation_AVX2 = std::function<void(Image&, int, std::uint8_t)>;
-//Advanced Vector Extensions 2
 
 constexpr const char* OUTPUT_FOLDER = "Output/";
 const std::string FOLDER_120 = OUTPUT_FOLDER + std::string("120/");
 const std::string FOLDER_VIDEOS = OUTPUT_FOLDER + std::string("Videos/");
 const std::string FOLDER_EDGEDETECTOR = OUTPUT_FOLDER + std::string("Edge Detector/");
 
-const std::vector<TwoIntTransformationByThreshold> transformations_by_threshold = {
-    [](Image& img, const int i, const int cn){img.below_threshold(i, cn, true); },
-    [](Image& img, const int i, const int cn){img.below_threshold(i, cn, false); },
-    [](Image& img, const int i, const int cn){img.aboveThreshold(i, cn, true); },
-    [](Image& img, const int i, const int cn){img.aboveThreshold(i, cn, false); }
+
+struct ThresholdParams {
+    bool below;
+    bool dark;
 };
 
-const std::vector<TwoIntTransformationByProportion> transformations_by_proportion = {
-    [](Image& img, const float prop, const int cn){img.belowProportion(prop, cn, true); },
-    [](Image& img, const float prop, const int cn){img.belowProportion(prop, cn, false); },
-    [](Image& img, const float prop, const int cn){img.aboveProportion(prop, cn, true); },
-    [](Image& img, const float prop, const int cn){img.aboveProportion(prop, cn, false); }
-};
-
-// Define the type for transformations that take an Image&, an int, and a uint8_t
+constexpr std::array<ThresholdParams, 4> transformation_params = {{
+    {true, true},   // BelowDark
+    {true, false},  // BelowLight
+    {false, true},  // AboveDark
+    {false, false}  // AboveLight
+}};
 
 
-// Declare the vector of transformations
-const std::vector<TwoIntTransformation_AVX2> colors_nuances_transformations_AVX2 = {
-    [](Image& img, const int threshold, const std::uint8_t colorNuance) {
-        img.darkenBelowThreshold_ColorNuance_AVX2(threshold, colorNuance);
+const std::vector<PartialTransformationFuncByProportion> partial_transformations_by_proportion_func = {
+    [](Image& img,
+        const float proportion, const int cn, const int fraction, const std::vector<int>& rectanglesToModify) {
+        img.below_proportion_region_fraction(proportion, cn, fraction, rectanglesToModify, true);
     },
-    [](Image& img, const int threshold, const std::uint8_t colorNuance) {
-        img.whitenBelowThreshold_ColorNuance_AVX2(threshold, colorNuance);
+    [](Image& img,
+        const float proportion, const int cn, const int fraction, const std::vector<int>& rectanglesToModify) {
+        img.below_proportion_region_fraction(proportion, cn, fraction, rectanglesToModify, false);
     },
-    [](Image& img, const int threshold, const std::uint8_t colorNuance) {
-        img.darkenAboveThreshold_ColorNuance_AVX2(threshold, colorNuance);
+    [](Image& img,
+        const float proportion, const int cn, const int fraction, const std::vector<int>& rectanglesToModify) {
+        img.above_proportion_region_fraction(proportion, cn, fraction, rectanglesToModify, true);
     },
-    [](Image& img, const int threshold, const std::uint8_t colorNuance) {
-        img.whitenAboveThreshold_ColorNuance_AVX2(threshold, colorNuance);
-    }
-};
-
-
-const std::vector<PartialTransformationFunc> partialTransformationsFunc = {
-    [](Image& img, const int i, const int cn, const int fraction, const std::vector<int>& rectanglesToModify) {
-        img.darkenBelowThresholdRegionFraction(i, cn, fraction, rectanglesToModify);
-    },
-    [](Image& img, const int i, const int cn, const int fraction, const std::vector<int>& rectanglesToModify) {
-        img.whitenBelowThresholdRegionFraction(i, cn, fraction, rectanglesToModify);
-    },
-    [](Image& img, const int i, const int cn, const int fraction, const std::vector<int>& rectanglesToModify) {
-        img.darkenAboveThresholdRegionFraction(i, cn, fraction, rectanglesToModify);
-    },
-    [](Image& img, const int i, const int cn, const int fraction, const std::vector<int>& rectanglesToModify) {
-        img.whitenAboveThresholdRegionFraction(i, cn, fraction, rectanglesToModify);
+    [](Image& img,
+        const float proportion, const int cn, const int fraction, const std::vector<int>& rectanglesToModify) {
+        img.above_proportion_region_fraction(proportion, cn, fraction, rectanglesToModify, false);
     }
 };
 
@@ -91,6 +77,7 @@ const std::vector<TransformationFunc> total_black_and_white_transformations = {
     [](Image& img, const int i) { img.reversed_black_and_white(i); }
 };
 
+
 const std::vector<std::string> total_step_by_step_suffixes = {
     "BTB", "BTW", "WTB", "WTW"
 };
@@ -102,17 +89,6 @@ const std::vector<std::string> reversal_step_by_step_suffixes = {
 const std::vector<std::string> total_black_and_white_suffixes = {
     "Black and white - Original", "Black and white - Reversed"
 };
-
-
-inline std::vector<std::string> generatePartialSuffixes() {
-    std::vector<std::string> partialSuffixes;
-    std::ranges::transform(
-        total_step_by_step_suffixes,
-        std::back_inserter(partialSuffixes),
-        [](const std::string& s) { return s + " Partial"; }
-    );
-    return partialSuffixes;
-}
 
 
 const std::vector total_step_by_step_output_dirs = {
@@ -129,6 +105,15 @@ const std::vector total_black_and_white_output_dirs = {
     std::string(OUTPUT_FOLDER) + "Reversed black and white/"
 };
 
+inline std::vector<std::string> generatePartialSuffixes() {
+    std::vector<std::string> partialSuffixes;
+    std::ranges::transform(
+        total_step_by_step_suffixes,
+        std::back_inserter(partialSuffixes),
+        [](const std::string& s) { return s + " Partial"; }
+    );
+    return partialSuffixes;
+}
 
 inline std::vector<std::string> generatePartialOutputDirs() {
     std::vector<std::string> partialOutputDirs;
