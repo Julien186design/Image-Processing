@@ -10,6 +10,11 @@
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
+#include <queue>
 
 void several_colors_transformations_streaming(
     const std::string& baseName,
@@ -18,20 +23,23 @@ void several_colors_transformations_streaming(
     const std::vector<float>& proportions,
     const std::vector<int>& colorNuances
 ) {
-    // Load the input image using OpenCV to avoid manual data handling
+    // Load the input image using OpenCV
     cv::Mat baseImageMat = cv::imread(inputPath, cv::IMREAD_COLOR);
     if (baseImageMat.empty()) {
         std::cerr << "Error: Could not load image " << inputPath << std::endl;
         return;
     }
 
-
-    // Initialize modified image as a copy of the base image
-    cv::Mat modifiedMat = baseImageMat.clone();
-
     // Calculate the number of steps and frames
     const int numSteps = static_cast<int>((proportions[1] - proportions[0]) / proportions[2]) + 1;
     const int nFrames = numSteps * 2 * (((colorNuances[1] - colorNuances[0]) / colorNuances[2]) + 1);
+
+    if (nFrames < 2 * fps) {
+        std::cerr << "Video less than 2 seconds long, creation canceled" << std::endl;
+        return;
+    }
+
+    std::cout << "Frames to process : " << nFrames << std::endl;
 
     // Generate output video path
     const std::string colorNuancesToString = "{" + std::to_string(colorNuances[0]) + "-" +
@@ -57,14 +65,33 @@ void several_colors_transformations_streaming(
     const size_t pixelCount = baseImageMat.rows * baseImageMat.cols;
     std::vector<int> rgbSums(pixelCount, 0);
 
-    for (size_t i = 0; i < pixelCount; ++i) {
-        const cv::Vec3b& pixel = baseImageMat.at<cv::Vec3b>(i / baseImageMat.cols, i % baseImageMat.cols);
-        rgbSums[i] = pixel[0] + pixel[1] + pixel[2];
+    // Parallel computation of RGB sums
+    const unsigned int numThreads = std::thread::hardware_concurrency();
+    std::vector<std::thread> threads;
+    const size_t chunkSize = pixelCount / numThreads;
+
+    for (unsigned int t = 0; t < numThreads; ++t) {
+        threads.emplace_back([&, t]() {
+            const size_t start = t * chunkSize;
+            const size_t end = (t == numThreads - 1) ? pixelCount : (t + 1) * chunkSize;
+
+            for (size_t i = start; i < end; ++i) {
+                const int row = static_cast<int>(i / baseImageMat.cols);
+                const int col = static_cast<int>(i % baseImageMat.cols);
+                const cv::Vec3b& pixel = baseImageMat.at<cv::Vec3b>(row, col);
+                rgbSums[i] = pixel[0] + pixel[1] + pixel[2];
+            }
+        });
     }
+
+    for (auto& thread : threads) {
+        thread.join();
+    }
+    threads.clear();
 
     // Sort RGB sums to compute thresholds
     std::vector<int> sortedRGB = rgbSums;
-    std::sort(sortedRGB.begin(), sortedRGB.end());
+    std::ranges::sort(sortedRGB);
 
     std::vector<int> thresholds(numSteps);
     for (int i = 0; i < numSteps; ++i) {
@@ -72,26 +99,96 @@ void several_colors_transformations_streaming(
         thresholds[i] = sortedRGB[static_cast<size_t>(pixelCount * cp)];
     }
 
-    // Pre-compute pixel masks to avoid repeated calculations
+    // Pre-compute pixel masks in parallel
     std::vector<std::vector<bool>> pixelMask(numSteps, std::vector<bool>(pixelCount, false));
+
     for (int propIdx = 0; propIdx < numSteps; ++propIdx) {
-        for (size_t pixelIdx = 0; pixelIdx < pixelCount; ++pixelIdx) {
-            if (rgbSums[pixelIdx] <= thresholds[propIdx]) {
-                pixelMask[propIdx][pixelIdx] = true;
-            }
+        for (unsigned int t = 0; t < numThreads; ++t) {
+            threads.emplace_back([&, propIdx, t]() {
+                const size_t start = t * chunkSize;
+                const size_t end = (t == numThreads - 1) ? pixelCount : (t + 1) * chunkSize;
+
+                for (size_t pixelIdx = start; pixelIdx < end; ++pixelIdx) {
+                    if (rgbSums[pixelIdx] <= thresholds[propIdx]) {
+                        pixelMask[propIdx][pixelIdx] = true;
+                    }
+                }
+            });
         }
+
+        for (auto& thread : threads) {
+            thread.join();
+        }
+        threads.clear();
     }
 
-    // Lambda function to write a frame to the video
-    auto writeFrame = [&]() {
-        video.write(modifiedMat);
+    // Frame buffer and processing queue
+    std::queue<cv::Mat> frameQueue;
+    std::mutex queueMutex;
+    std::condition_variable queueCV;
+    std::atomic<bool> processingDone{false};
+    constexpr size_t maxQueueSize = 30; // Limit memory usage
+
+    // Video writer thread
+    std::thread writerThread([&]() {
+        while (true) {
+            std::unique_lock<std::mutex> lock(queueMutex);
+            queueCV.wait(lock, [&]() { return !frameQueue.empty() || processingDone; });
+
+            if (frameQueue.empty() && processingDone) {
+                break;
+            }
+
+            if (!frameQueue.empty()) {
+                cv::Mat frame = std::move(frameQueue.front());
+                frameQueue.pop();
+                lock.unlock();
+                queueCV.notify_one();
+
+                video.write(frame);
+            }
+        }
+    });
+
+    // Lambda function to add frame to queue
+    auto enqueueFrame = [&](const cv::Mat& frame) {
+        std::unique_lock<std::mutex> lock(queueMutex);
+        queueCV.wait(lock, [&]() { return frameQueue.size() < maxQueueSize; });
+        frameQueue.push(frame.clone());
+        lock.unlock();
+        queueCV.notify_one();
     };
 
-    // Lambda function to process a frame with color transformations
+    // Lambda function to apply color transformation to pixels in parallel
+    auto applyColorTransform = [&](cv::Mat& target, const std::vector<bool>& mask, const uint8_t newColor) {
+        for (unsigned int t = 0; t < numThreads; ++t) {
+            threads.emplace_back([&, t]() {
+                const size_t start = t * chunkSize;
+                const size_t end = (t == numThreads - 1) ? pixelCount : (t + 1) * chunkSize;
+
+                for (size_t pixelIdx = start; pixelIdx < end; ++pixelIdx) {
+                    if (mask[pixelIdx]) {
+                        const size_t row = pixelIdx / baseImageMat.cols;
+                        const size_t col = pixelIdx % baseImageMat.cols;
+                        target.at<cv::Vec3b>(static_cast<int>(row), static_cast<int>(col)) =
+                            cv::Vec3b(newColor, newColor, newColor);
+                    }
+                }
+            });
+        }
+
+        for (auto& thread : threads) {
+            thread.join();
+        }
+        threads.clear();
+    };
+
+    // Lambda function to process frames with color transformations
     auto process = [&](const int propIdx, const bool reverseOrder) {
         const auto& mask = pixelMask[propIdx];
         const int startIdx = reverseOrder ? 1 : 0;
         const int reverseIdx = reverseOrder ? 0 : 1;
+        cv::Mat modifiedMat;
 
         // Phase 1: Ascending colorNuance
         for (int colorNuance = colorNuances[0]; colorNuance <= colorNuances[1]; colorNuance += colorNuances[2]) {
@@ -100,40 +197,31 @@ void several_colors_transformations_streaming(
             }
 
             const uint8_t newColor = (startIdx == 1) ? colorNuance : (255 - colorNuance);
-
-            for (size_t pixelIdx = 0; pixelIdx < pixelCount; ++pixelIdx) {
-                if (mask[pixelIdx]) {
-                    const int row = pixelIdx / baseImageMat.cols;
-                    const int col = pixelIdx % baseImageMat.cols;
-                    modifiedMat.at<cv::Vec3b>(row, col) = cv::Vec3b(newColor, newColor, newColor);
-                }
-            }
-            writeFrame();
+            applyColorTransform(modifiedMat, mask, newColor);
+            enqueueFrame(modifiedMat);
         }
 
         // Phase 2: Descending colorNuance
         for (int colorNuance = colorNuances[1]; colorNuance >= colorNuances[0]; colorNuance -= colorNuances[2]) {
             const uint8_t newColor = (reverseIdx == 1) ? colorNuance : (255 - colorNuance);
-
-            for (size_t pixelIdx = 0; pixelIdx < pixelCount; ++pixelIdx) {
-                if (mask[pixelIdx]) {
-                    const int row = pixelIdx / baseImageMat.cols;
-                    const int col = pixelIdx % baseImageMat.cols;
-                    modifiedMat.at<cv::Vec3b>(row, col) = cv::Vec3b(newColor, newColor, newColor);
-                }
-            }
-            writeFrame();
+            applyColorTransform(modifiedMat, mask, newColor);
+            enqueueFrame(modifiedMat);
         }
     };
 
     // Process each step with alternating order
     bool reverseOrder = false;
     for (int i = 0; i < numSteps; ++i) {
-        const float cp = proportions[0] + i * proportions[2];
+        const float cp = proportions[0] + static_cast<float>(i) * proportions[2];
         std::cout << "Processing proportion " << cp << std::endl;
         process(i, reverseOrder);
         reverseOrder = !reverseOrder;
     }
+
+    // Signal completion and wait for writer thread
+    processingDone = true;
+    queueCV.notify_one();
+    writerThread.join();
 
     // Release resources
     video.release();
@@ -156,7 +244,7 @@ void edge_detector_video(
     const int width = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_WIDTH));
     const int height = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_HEIGHT));
     const int totalFrames = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_COUNT));
-    std::cout << "totalFrames " << totalFrames << std::endl;
+    std::cout << "Number of frames in the original video " << totalFrames << std::endl;
     const double fps = capture.get(cv::CAP_PROP_FPS);
 
     const int startFrame = std::max(0, frames[0]);
@@ -169,7 +257,7 @@ void edge_detector_video(
         std::cerr << "Error: invalid frame range [" << startFrame << ", " << endFrame << "]\n";
         return;
     }
-
+    std::cout << "Frames to process : " << framesToProcess << std::endl;
     const std::string tempVideoPath = std::string(FOLDER_VIDEOS) + baseName + "_temp.mp4";
 
     cv::VideoWriter video(tempVideoPath,
