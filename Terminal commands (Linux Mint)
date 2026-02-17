@@ -10,6 +10,9 @@ find . -maxdepth 1 -type f -name '75*.mp4'  -exec sh -c 'ffmpeg -y -i "$1" -c:v 
 Compressing all PNG images whose size is greater than 16 Mo.
 find . -maxdepth 1 -type f -name '*.png' -size +16M -exec pngcrush -ow {} \;
 
+Deleting all files in a folder (subfolders included).
+find . -type f -delete
+
 Deleting files whose name contains "Tolerance 1".
 rm *"Tolerance 1"*
 
@@ -18,9 +21,6 @@ ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=nb_read_
 
 Listing the subfolders of "Input" and "Output"
 for dir in Input Output; do echo "=== $dir ==="; tree -d "$dir"; echo; done
-
-Deleting all files in a folder (subfolders included).
-find . -type f -delete
 
 Listing files whose name begis by 623 and contains "rage 0" and " 1.00-" | Display the number of files.
 find . -type f -name "623*rage 0* 1.00-*" | awk '{print; c++} END{print c " files"}'
