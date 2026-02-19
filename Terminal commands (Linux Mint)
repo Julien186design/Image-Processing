@@ -43,5 +43,10 @@ find . -type f \( -iname '*.jpg' -o -iname '*.png' \) -exec du -h {} + | sort -h
 Listing MP4 files, including subfolders
 find . -type f \( -iname "*.mp4" \) -printf "%P\n"
 
+Renaming all files whose name begin by "ABC-" to replace it by "CBA".
+for f in ABC-*; do
+  mv "$f" "CBA-${f#ABC-}"
+done
+
 Renaming all files whose name begin by "ABC-" to delete the first 4 characters ("ABC-" is for the example).
 for f in "ABC-"*; do   mv "$f" "${f#ABC-}"; done
