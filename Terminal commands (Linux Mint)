@@ -28,16 +28,18 @@ find . -type f -name "623*rage 0* 1.00-*" | awk '{print; c++} END{print c " file
 Listing unique filenames by cutting after ".jpg". 
 find -type f   -printf '%f\n' | sed 's/ *.jpg//' | sort -u
 
-Listing unique filenames in the "One Color" folder by cutting after "- Tolerance". Delete "Output/One Color" to run in the current folder.
-find "Output/One Color" -type f   -printf '%f\n' | sed 's/ - Tolerance.*//' | sort -u
-
-Listing unique filenames whose name contains "CN 40" | display names truncated from "TB".
-find -type f -name "*CN 40*" -printf '%f\n' | sed 's/TB.*//' | sort -u
+Listing unique filename, in the "One Color" folder. Delete "Output/One Color" to run in the current folder. 
+find . -type f -name "One color/543*" | sed 's/png.*//' | sort -u | awk '{print; c++} END{print c " files"}'
+The path get cleaned and deduplicated and finally the number of lines produced displays.
+Command options : 
+sed 's/png.*//' 
+  | Cutting after "png". For each line (file path), the first occurrence of the string “png” followed by any character (.*) is replaced with nothing. In concrete terms, as soon as it encounters "png" in the path, it truncates the line at that point, removing "png" and everything that follows on the line.
+sort -u 
+  | Sorting the lines in lexicographical order and removing duplicates (option -u).
+awk '{print; c++} END{print c " files"}' 
+  | Displaying, for each input line, the line (print) and increments the counter c. At the end (END), displays the total number of lines processed, in the form N files.
 
 Listing the 20 largest JPG and PNG files (useful to launch in the "Output" folder if processing time is getting important).
-find . -type f -exec du -h {} + | sort --human-numeric-sort --reverse | head -n 20
-
-Listing the 20 largest
 find . -type f \( -iname '*.jpg' -o -iname '*.png' \) -exec du -h {} + | sort -hr | head -n 20
 
 Listing MP4 files, including subfolders
