@@ -7,6 +7,7 @@
 #include <string>
 #include <functional>
 #include <algorithm>
+#include <omp.h>
 
 #include "Image.h"
 
@@ -58,11 +59,6 @@ const std::vector<PartialTransformationFuncByProportion> partial_transformations
     }
 };
 
-const std::vector<ReverseTransformationFunc> total_reversal_step_by_step_transformations = {
-    [](Image& img, const int i) { img.reverseAboveThreshold(i); },
-    [](Image& img, const int i) { img.reverseBelowThreshold(i); }
-};
-
 const std::vector<AlternatingTransformation> total_alternating_black_and_white_transformations = {
     [](Image& img, const int i, const int first_t, const int last_t) {
         img.alternatelyDarkenAndWhitenBelowTheThreshold(i, first_t, last_t);
@@ -71,12 +67,6 @@ const std::vector<AlternatingTransformation> total_alternating_black_and_white_t
         img.alternatelyDarkenAndWhitenAboveTheThreshold(i, first_t, last_t);
     }
 };
-
-const std::vector<TransformationFunc> total_black_and_white_transformations = {
-    [](Image& img, const int i) { img.original_black_and_white(i); },
-    [](Image& img, const int i) { img.reversed_black_and_white(i); }
-};
-
 
 const std::vector<std::string> total_step_by_step_suffixes = {
     "BTB", "BTW", "WTB", "WTW"
@@ -105,7 +95,7 @@ const std::vector total_black_and_white_output_dirs = {
     std::string(OUTPUT_FOLDER) + "Reversed black and white/"
 };
 
-inline std::vector<std::string> generatePartialSuffixes() {
+inline std::vector<std::string>  generatePartialSuffixes() {
     std::vector<std::string> partialSuffixes;
     std::ranges::transform(
         total_step_by_step_suffixes,
@@ -113,6 +103,10 @@ inline std::vector<std::string> generatePartialSuffixes() {
         [](const std::string& s) { return s + " Partial"; }
     );
     return partialSuffixes;
+}
+
+inline int computeNumThreads() {
+    return std::max(1, omp_get_max_threads() - THREAD_OFFSET);
 }
 
 inline std::vector<std::string> generatePartialOutputDirs() {
