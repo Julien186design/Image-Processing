@@ -7,6 +7,7 @@
 #include <cmath>
 #include <iostream>
 #include <cstring>
+#include <optional>
 #include "schrift.h"
 
 //legacy feature of C
@@ -23,20 +24,41 @@ enum ImageType {
 	PNG, JPG, BMP, TGA
 };
 
-struct Font;
-
 namespace SimpleColors {
 	constexpr uint8_t ONE_THIRD = 85;
 	constexpr uint8_t HALF = 127;
 	constexpr uint8_t FULL = 255;
 }
 
+struct Font;
+
 struct EdgeDetectorResult {
     std::vector<uint8_t> outputRGB;
     double minGradient, maxGradient;
 };
 
+struct ImageInfo {
+	std::string baseName;
+	std::string inputPath;
+};
 
+struct Font {
+	SFT sft = {nullptr, 12, 12, 0, 0, SFT_DOWNWARD_Y|SFT_RENDER_IMAGE};
+	Font(const char* fontfile, const uint16_t size) {
+		if((sft.font = sft_loadfile(fontfile)) == NULL) {
+			printf("\e[31m[ERROR] Failed to load %s\e[0m\n", fontfile);
+			return;
+		}
+		setSize(size);
+	}
+	~Font() {
+		sft_freefont(sft.font);
+	}
+	void setSize(const uint16_t size) {
+		sft.xScale = size;
+		sft.yScale = size;
+	}
+};
 
 struct Image {
 	uint8_t* data = nullptr;
@@ -118,19 +140,14 @@ struct Image {
 
 	Image& grayscale_avg();
 
-	Image& below_proportion(float proportion, int cn, bool useDarkNuance);
-	Image& above_proportion(float proportion, int cn, bool useDarkNuance);
-
-	Image& threshold_by_proportion(float proportion, int cn, bool useDarkNuance, bool below);
-
-	Image& reverseBelowThreshold(int threshold);
-	Image& reverseAboveThreshold(int threshold);
+	std::optional<int> compute_threshold(float proportion, bool below) const;
+	Image& threshold_by_proportion(float proportion, int colorNuance, bool useDarkNuance, bool below);
+	Image& reverse_by_proportion(float proportion, bool below);
 
 	Image& alternatelyDarkenAndWhitenBelowTheThreshold(int s, int first_threshold,	int last_threshold);
 	Image& alternatelyDarkenAndWhitenAboveTheThreshold(int s, int first_threshold,	int last_threshold);
 
-	Image& original_black_and_white(int threshold);
-	Image& reversed_black_and_white(int threshold);
+	Image& black_and_white(float proportion, bool below);
 
 	static void simplify_pixel(
 	uint8_t& r, uint8_t& g, uint8_t& b,
@@ -139,7 +156,7 @@ struct Image {
 	uint8_t r_val_full, uint8_t g_val_full, uint8_t b_val_full,
 	int tolerance);
 
-	Image& simplify_to_dominant_color_combinations_with_average(int tolerance);
+	Image& simplify_to_dominant_color_combinations_with_average(int tolerance, const std::vector<float>& weightOfRGB);
 	Image& simplify_to_dominant_color_combinations_without_average(int tolerance,
 			uint8_t r_third, uint8_t g_third, uint8_t b_third,
 			uint8_t r_half, uint8_t g_half, uint8_t b_half,
@@ -155,9 +172,9 @@ struct Image {
 		TransformFunc transformation
 	);
 
-	Image& below_proportion_region_fraction(float proportion, int cn, int fraction,
+	Image& below_proportion_region_fraction(float proportion, int colorNuance, int fraction,
 	const std::vector<int>& rectanglesToModify, bool useDarkNuance);
-	Image& above_proportion_region_fraction(float proportion, int cn, int fraction,
+	Image& above_proportion_region_fraction(float proportion, int colorNuance, int fraction,
 		const std::vector<int>& rectanglesToModify, bool useDarkNuance);
 
 	Image& grayscale_lum();
@@ -181,7 +198,6 @@ struct Image {
 
 
 };
-
 
 class EdgeDetectorPipeline {
 private:
@@ -347,32 +363,6 @@ public:
 
         return outputRGB;
     }
-};
-
-
-
-struct ImageInfo {
-	std::string baseName;
-	std::string inputPath;
-};
-
-
-struct Font {
-	SFT sft = {nullptr, 12, 12, 0, 0, SFT_DOWNWARD_Y|SFT_RENDER_IMAGE};
-	Font(const char* fontfile, const uint16_t size) {
-		if((sft.font = sft_loadfile(fontfile)) == NULL) {
-			printf("\e[31m[ERROR] Failed to load %s\e[0m\n", fontfile);
-			return;
-		}
-		setSize(size);
-	}
-	~Font() {
-		sft_freefont(sft.font);
-	}
-	void setSize(const uint16_t size) {
-		sft.xScale = size;
-		sft.yScale = size;
-	}
 };
 
 inline ImageInfo extractImageInfo(const std::string& inputFile) {
