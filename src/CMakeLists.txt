@@ -30,6 +30,8 @@ add_executable(video_transform
         TransformationsConfig.h
         VideoProcessing.cpp
         VideoProcessing.h
+        ProcessingConfig.h
+        ProcessingConfig.cpp
 )
 
 # Lien avec OpenCV et OpenMP
