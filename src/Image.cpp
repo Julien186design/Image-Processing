@@ -18,10 +18,12 @@
 #include <fmt/color.h>
 #include <cmath>     // for std::round
 #include <ranges>
-#include "Image.h"
-#include "TransformationsConfig.h"
 #include <vector>
 #include <omp.h>
+#include <optional>
+#include <array>
+#include "Image.h"
+#include "TransformationsConfig.h"
 
 EdgeDetectorResult process_edge_detection_core(
     const uint8_t* grayData,
@@ -136,10 +138,10 @@ EdgeDetectorResult process_edge_detection_core(
 
 
 
-Image::Image(const char* filename, const int channel_force) {
-	if(read(filename, channel_force)) {
+Image::Image(const char* filename, const int channel_force) : channels(0) {
+	if (read(filename, channel_force)) {
 		printf("Read %s\n", filename);
-		size = w*h*channels;
+		size = w * h * channels;
 	} else {
 		printf("Failed to read %s\n", filename);
 	}
@@ -210,46 +212,95 @@ ImageType Image::get_file_type(const char* filename) {
 }
 
 
+std::optional<int> Image::compute_threshold(
+	const float proportion,
+	const bool below
+) const
+{
+	// Reject invalid proportions
+	if (proportion <= 0.0f || proportion >= 1.0f)
+		return std::nullopt;
+
+	// Number of pixels (assuming RGB interleaved)
+	const size_t pixelCount = size / static_cast<size_t>(channels);
+
+	// Histogram for possible RGB sums [0, 765] (765 = 3 * 255)
+	std::array<size_t, 766> histogram{};
+	histogram.fill(0);
+
+	// Build histogram
+	for (size_t i = 0; i < size; i += static_cast<size_t>(channels))
+	{
+		const int sum = data[i] + data[i + 1] + data[i + 2];
+		++histogram[sum];
+	}
+
+	// Target rank in sorted order
+	const size_t targetRank =
+		static_cast<float>(pixelCount) * proportion;
+
+	size_t cumulative = 0;
+
+	if (below)
+	{
+		// Traverse from darkest to brightest
+		for (int value = 0; value <= 765; ++value)
+		{
+			cumulative += histogram[value];
+			if (cumulative > targetRank)
+				return value;
+		}
+	}
+	else
+	{
+		// Traverse from brightest to darkest
+		for (int value = 765; value >= 0; --value)
+		{
+			cumulative += histogram[value];
+			if (cumulative > targetRank)
+				return value;
+		}
+	}
+
+	return std::nullopt; // Should not happen
+}
+
 
 Image& Image::threshold_by_proportion(
 	const float proportion,
-	const int cn,
+	const int colorNuance,
 	const bool useDarkNuance,
-	const bool below  // true = below, false = above
+	const bool below
 ) {
-	if (proportion <= 0.0f || proportion >= 1.0f) return *this;
+	const auto threshold = compute_threshold(proportion, below);
+	if (!threshold) return *this;
 
-	const size_t pixelCount = size / static_cast<size_t>(channels);
-	std::vector<int> rgbValues(pixelCount);
-
-	for(size_t i = 0, idx = 0; i < size; i += static_cast<size_t>(channels), ++idx) {
-		rgbValues[idx] = data[i] + data[i + 1] + data[i + 2];
-	}
-
-	std::vector<int> sortedValues = rgbValues;
-	if (below) {
-		std::ranges::sort(sortedValues);
-	} else {
-		std::ranges::sort(sortedValues, std::greater{});
-	}
-	const int threshold = sortedValues[static_cast<size_t>(static_cast<float>(pixelCount) * proportion)];
-
-	const int newColor = useDarkNuance ? cn : 255 - cn;
-	for(size_t i = 0; i < size; i += static_cast<size_t>(channels)) {
-		if ((below && data[i] + data[i + 1] + data[i + 2] <= threshold) ||
-			(!below && data[i] + data[i + 1] + data[i + 2] >= threshold)) {
+	const int newColor = useDarkNuance ? colorNuance : 255 - colorNuance;
+	for (size_t i = 0; i < size; i += static_cast<size_t>(channels)) {
+		if (const int sum = data[i] + data[i + 1] + data[i + 2]; (below && sum <= *threshold) ||
+			(!below && sum >= *threshold))
 			data[i] = data[i + 1] = data[i + 2] = newColor;
-		}
 	}
 	return *this;
 }
 
-Image& Image::below_proportion(const float proportion, const int cn, const bool useDarkNuance) {
-	return threshold_by_proportion(proportion, cn, useDarkNuance, true);
-}
+Image& Image::reverse_by_proportion(const float proportion, const bool below) {
+	const auto threshold = compute_threshold(proportion, below);
+	if (!threshold) return *this;
 
-Image& Image::above_proportion(const float proportion, const int cn, const bool useDarkNuance) {
-	return threshold_by_proportion(proportion, cn, useDarkNuance, false);
+	const int thresh = *threshold;
+	const auto cmp = below
+		? [](const int sum, const int t){ return sum <= t; }
+		: [](const int sum, const int t){ return sum >= t; };
+
+	for (size_t i = 0; i < size; i += channels) {
+		if (cmp(data[i] + data[i+1] + data[i+2], thresh)) {
+			data[i]   = 255 - data[i];
+			data[i+1] = 255 - data[i+1];
+			data[i+2] = 255 - data[i+2];
+		}
+	}
+	return *this;
 }
 
 void Image::simplify_pixel(
@@ -304,23 +355,24 @@ void Image::simplify_pixel(
 	b = new_vals[2];
 }
 
-Image& Image::simplify_to_dominant_color_combinations_with_average(const int tolerance) {
+Image& Image::simplify_to_dominant_color_combinations_with_average(
+	const int tolerance, const std::vector<float>& weightOfRGB) {
 	for (size_t i = 0; i < size; i += channels) {
 		uint8_t& r = data[i];
 		uint8_t& g = data[i + 1];
 		uint8_t& b = data[i + 2];
 
-		const uint8_t r_third = avg_u8_round(r, SimpleColors::ONE_THIRD);
-		const uint8_t g_third = avg_u8_round(g, SimpleColors::ONE_THIRD);
-		const uint8_t b_third = avg_u8_round(b, SimpleColors::ONE_THIRD);
+		const uint8_t r_third = static_cast<uint8_t>(weightOfRGB[0]) * avg_u8_round(r, SimpleColors::ONE_THIRD);
+		const uint8_t g_third = static_cast<uint8_t>(weightOfRGB[1]) * avg_u8_round(g, SimpleColors::ONE_THIRD);
+		const uint8_t b_third = static_cast<uint8_t>(weightOfRGB[2]) * avg_u8_round(b, SimpleColors::ONE_THIRD);
 
-		const uint8_t r_half = avg_u8_round(r, SimpleColors::HALF);
-		const uint8_t g_half = avg_u8_round(g, SimpleColors::HALF);
-		const uint8_t b_half = avg_u8_round(b, SimpleColors::HALF);
+		const uint8_t r_half = static_cast<uint8_t>(weightOfRGB[0]) * avg_u8_round(r, SimpleColors::HALF);
+		const uint8_t g_half = static_cast<uint8_t>(weightOfRGB[1]) * avg_u8_round(g, SimpleColors::HALF);
+		const uint8_t b_half = static_cast<uint8_t>(weightOfRGB[2]) * avg_u8_round(b, SimpleColors::HALF);
 
-		const uint8_t r_full = avg_u8_round(r, SimpleColors::FULL);
-		const uint8_t g_full = avg_u8_round(g, SimpleColors::FULL);
-		const uint8_t b_full = avg_u8_round(b, SimpleColors::FULL);
+		const uint8_t r_full = static_cast<uint8_t>(weightOfRGB[0]) * avg_u8_round(r, SimpleColors::FULL);
+		const uint8_t g_full = static_cast<uint8_t>(weightOfRGB[1]) * avg_u8_round(g, SimpleColors::FULL);
+		const uint8_t b_full = static_cast<uint8_t>(weightOfRGB[2]) * avg_u8_round(b, SimpleColors::FULL);
 
 		simplify_pixel(
 			r, g, b,
@@ -356,54 +408,40 @@ Image& Image::simplify_to_dominant_color_combinations_without_average(
 	return *this;
 }
 
-Image& Image::reverseAboveThreshold(const int threshold) {
-	for(size_t i = 0; i < size; i += channels) {
-		if (data[i] + data[i + 1] + data[i + 2] < threshold) {
-			data[i] = 255 - data[i];
-			data[i + 1] = 255 - data[i + 1];
-			data[i + 2] = 255 - data[i + 2];
-		}
-	}
-	return *this;
-}
 
-Image& Image::reverseBelowThreshold(const int threshold) {
-	for(size_t i = 0; i < size; i+=channels) {
-		if (data[i] + data[i+1] + data[i+2] > threshold) {
-			data[i] = 255 - data[i];
-			data[i + 1] = 255 - data[i + 1];
-			data[i + 2] = 255 - data[i + 2];
-		}
-	}
-	return *this;
-}
+// Applies a black and white filter based on a proportion of pixels rather than a fixed threshold.
+// The proportion determines how many pixels will be considered as "above" or "below" the computed threshold.
+// If 'below' is true, pixels with a sum of RGB values less than or equal to the threshold are inverted.
+// Otherwise, pixels with a sum of RGB values greater than or equal to the threshold are inverted.
+Image& Image::black_and_white(const float proportion, const bool below) {
+	// Compute the threshold based on the given proportion of pixels
+	const auto threshold = compute_threshold(proportion, below);
+	if (!threshold) return *this;
 
-Image& Image::original_black_and_white(const int threshold) {
-	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
-		int rgb = (data[i] + data[i+1] + data[i+2]);
-		if (rgb > threshold) {
-			data[i] = data[i + 1] = data[i + 2] = 255;
-		} else {
-			data[i] = data[i + 1] = data[i + 2] = 0;
-		}
-	}
-	return *this;
-}
+	const int thresh = *threshold;
 
-Image& Image::reversed_black_and_white(const int threshold) {
+	// Define the comparison function based on the 'below' parameter
+	const auto cmp = below
+		? [](const int sum, const int t) { return sum <= t; }
+	: [](const int sum, const int t) { return sum >= t; };
+
+	// Iterate over each pixel in the image
 	for (size_t i = 0; i < size; i += channels) {
+		const int rgb_sum = data[i] + data[i + 1] + data[i + 2];
 
-		const int rgb = data[i] + data[i + 1] + data[i + 2];
+		// Apply the comparison to determine if the pixel should be black or white
+		const uint8_t value = cmp(rgb_sum, thresh) ? 0 : 255;
 
-		const uint8_t value = (rgb < threshold) ? 255 : 0;
-
+		// Set the RGB values to either 0 (black) or 255 (white)
 		data[i] = data[i + 1] = data[i + 2] = value;
 	}
+
 	return *this;
 }
 
+
 // in construction
-Image& Image::alternatelyDarkenAndWhitenBelowTheThreshold(int s, int first_threshold,	int last_threshold) {
+Image& Image::alternatelyDarkenAndWhitenBelowTheThreshold(const int s, int first_threshold,	int last_threshold) {
 	const int threshold3 = 3 * s;
 	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
 		if (const int rgb = (data[i] + data[i+1] + data[i+2]); rgb < threshold3) {
@@ -413,7 +451,7 @@ Image& Image::alternatelyDarkenAndWhitenBelowTheThreshold(int s, int first_thres
 	return *this;
 }
 
-Image& Image::alternatelyDarkenAndWhitenAboveTheThreshold(int s, int first_threshold,	int last_threshold) {
+Image& Image::alternatelyDarkenAndWhitenAboveTheThreshold(const int s, int first_threshold,	int last_threshold) {
 	const int threshold3 = 3 * s;
 	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
 		if (const int rgb = (data[i] + data[i+1] + data[i+2]); rgb > threshold3) {
@@ -488,12 +526,12 @@ Image& Image::apply_proportion_transformation_region_fraction(
 
 Image& Image::below_proportion_region_fraction(
     const float proportion,
-    const int cn,
+    const int colorNuance,
     const int fraction,
     const std::vector<int>& rectanglesToModify,
     const bool useDarkNuance) {
 
-    const int newColor = useDarkNuance ? cn : 255 - cn;
+    const int newColor = useDarkNuance ? colorNuance : 255 - colorNuance;
     return apply_proportion_transformation_region_fraction(
         proportion,
         fraction,
@@ -505,12 +543,12 @@ Image& Image::below_proportion_region_fraction(
 
 Image& Image::above_proportion_region_fraction(
     const float proportion,
-    const int cn,
+    const int colorNuance,
     const int fraction,
     const std::vector<int>& rectanglesToModify,
     const bool useDarkNuance) {
 
-    const int newColor = useDarkNuance ? cn : 255 - cn;
+    const int newColor = useDarkNuance ? colorNuance : 255 - colorNuance;
     return apply_proportion_transformation_region_fraction(
         proportion,
         fraction,
@@ -1185,8 +1223,6 @@ Image& Image::crop(const uint16_t cx, const uint16_t cy, const uint16_t cw, cons
 
 	return *this;
 }
-
-
 
 
 Image& Image::resizeNN(const uint16_t nw, const uint16_t nh) {
