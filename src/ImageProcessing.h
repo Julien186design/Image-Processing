@@ -29,7 +29,7 @@ private:
 public:
     ImageBuffer(const int w, const int h, const int channels) : buffer(w, h, channels) {}
 
-    void resetFrom(const Image& source) {
+    void resetFrom(const Image& source) const {
         assert(buffer.size == source.size);
         std::memcpy(buffer.data, source.data, buffer.size);
     }
@@ -41,7 +41,7 @@ public:
         buffer.write(path);
     }
 
-    void clear() {
+    static void clear() {
         // Force la libération si Image a une méthode dédiée
         // Sinon, cette méthode ne fait rien (destructeur s'en charge)
         // buffer.release();  // Si Image a cette méthode
@@ -114,95 +114,6 @@ inline std::vector<int> range_to_vector(const std::vector<int>& input) {
 
 
 
-// ============================================================================
-// WRAPPERS FOR TYPES OF TRANSFORMATIONS
-// ============================================================================
-
-inline std::vector<GenericTransformationFunc> wrapSimpleTransforms(
-    const std::vector<TransformationFunc>& transforms
-) {
-    std::vector<GenericTransformationFunc> wrapped;
-    wrapped.reserve(transforms.size());
-
-    for (const auto& transform : transforms) {
-        wrapped.emplace_back([transform](Image& img, const int t, const std::vector<int>&) {
-            transform(img, t);
-        });
-    }
-
-    return wrapped;
-}
-
-
-inline std::vector<GenericTransformationFunc> wrapAlternatingTransforms(
-    const std::vector<AlternatingTransformation>& transforms
-) {
-    std::vector<GenericTransformationFunc> wrapped;
-    wrapped.reserve(transforms.size());
-
-    for (const auto& transform : transforms) {
-        wrapped.emplace_back([transform](Image& img, int, const std::vector<int>& params) {
-            // params[0] = firstThreshold, params[1] = lastThreshold, params[2] = step
-            transform(img, params[0], params[1], params[2]);
-        });
-    }
-
-    return wrapped;
-}
-
-inline std::vector<GenericTransformationFunc> wrapPartialTransforms(
-    const std::vector<PartialTransformationFunc>& transforms
-) {
-    std::vector<GenericTransformationFunc> wrapped;
-    wrapped.reserve(transforms.size());
-
-    for (const auto& transform : transforms) {
-        wrapped.emplace_back([transform](Image& img, const int t, const std::vector<int>& params) {
-            const int cn = params[0];
-            const int fraction = params[1];
-            const std::vector<int> rectangles(params.begin() + 2, params.end());
-            transform(img, t, cn, fraction, rectangles);
-        });
-    }
-
-    return wrapped;
-}
-
-inline std::vector<GenericTransformationFuncWithColorNuances> wrapPartialTransformsWithRectangles(
-    const std::vector<PartialTransformationFunc>& transforms
-) {
-    std::vector<GenericTransformationFuncWithColorNuances> wrapped;
-    wrapped.reserve(transforms.size());
-
-    for (const auto& transform : transforms) {
-        wrapped.emplace_back([transform](Image& img, const int i, const int cn, const int fraction,
-                const std::vector<int>& rectanglesToModify) {
-            transform(img, i, cn, fraction, rectanglesToModify);
-        });
-    }
-
-    return wrapped;
-}
-
-
-inline std::vector<GenericTransformationFunc>
-wrapTwoIntTransforms(const std::vector<TwoIntTransformationByThreshold>& transforms) {
-
-    std::vector<GenericTransformationFunc> wrapped;
-    wrapped.reserve(transforms.size());
-
-    for (const auto& t : transforms) {
-        wrapped.emplace_back(
-            [t](Image& img, const int threshold, const std::vector<int>& params) {
-                // params[0] = colorNuance
-                t(img, threshold, params[0]);
-            }
-        );
-    }
-    return wrapped;
-}
-
-
 inline WeightedColors calculateWeightedColors(
     const std::vector<float>& weightOfRGB) {
     return {
@@ -235,52 +146,88 @@ inline std::string makeWeightedColors(const std::vector<float>& weightOfRGB) {
 }
 
 
-inline std::vector<std::vector<float>> generateColorConfigs(const float step) {
-    const int n = static_cast<int>(1.0f / step);
-    const int total_configs = (n + 1) * (4 * n - 1);
+inline std::vector<std::vector<float>> generateColorConfigs(const std::vector<float> &weightOfRGB) {
+    const int n = static_cast<int>((weightOfRGB[1] - weightOfRGB[0]) / weightOfRGB[2]);
+    const int total_configs = (n + 1) * (n + 1) * (n + 1);
 
     std::vector<std::vector<float>> configs;
     configs.reserve(total_configs);
 
     for (int i = 0; i <= n; ++i) {
-        const float weight = static_cast<float>(i) * step;
-        configs.push_back({1.0f, 1.0f, 1.0f - weight});
-
-        for (int j = 1; j <= n; ++j) {
-            const float w = step * static_cast<float>(j);
-            configs.push_back({1.0f,     1.0f - w, 1.0f - weight});
-            configs.push_back({1.0f - w, 1.0f,     1.0f - weight});
-        }
-
-        for (int j = 1; j <= n - 1; ++j) {
-            const float w1 = step * static_cast<float>(j);
-            const float w2 = step * static_cast<float>(j + 1);
-            configs.push_back({1.0f - w1, 1.0f - w2, 1.0f - weight});
-            configs.push_back({1.0f - w2, 1.0f - w1, 1.0f - weight});
+        for (int j = 0; j <= n; ++j) {
+            for (int k = 0; k <= n; ++k) {
+                configs.push_back({
+                weightOfRGB[0] + k * weightOfRGB[2],
+                weightOfRGB[0] + j * weightOfRGB[2],
+                weightOfRGB[0] + i * weightOfRGB[2]
+                });
+            }
         }
     }
 
     return configs;
 }
 
+struct OneColorPipeline {
+    const std::vector<std::vector<float>> configs;
+    const bool average;
+
+    explicit OneColorPipeline(const std::vector<float>& weightOfRGB, const bool average)
+        : configs(generateColorConfigs(weightOfRGB)), average(average) {}
+
+    struct ConfigParams {
+        uint8_t r_third, g_third, b_third;
+        uint8_t r_half,  g_half,  b_half;
+        uint8_t r_full,  g_full,  b_full;
+        std::string weightedColors;
+    };
+
+    // Pre-compute the color constants for a given config index
+    [[nodiscard]] ConfigParams buildParams(const size_t configIdx) const {
+        const auto& config = configs[configIdx];
+        const auto [r_third, g_third, b_third,
+                    r_half,  g_half,  b_half,
+                    r_full,  g_full,  b_full] = calculateWeightedColors(config);
+        return { r_third, g_third, b_third,
+                 r_half,  g_half,  b_half,
+                 r_full,  g_full,  b_full,
+                 makeWeightedColors(config) };
+    }
+
+    // Apply without_average transform to an Image in-place
+    static void applyWithoutAverage(Image& img, const int tolerance, const ConfigParams& p) {
+        img.simplify_to_dominant_color_combinations_without_average(
+            tolerance,
+            p.r_third, p.g_third, p.b_third,
+            p.r_half,  p.g_half,  p.b_half,
+            p.r_full,  p.g_full,  p.b_full
+        );
+    }
+
+    // Apply with_average transform to an Image in-place
+    static void applyWithAverage(Image& img, const int tolerance,
+                                 const std::vector<float>& config) {
+        img.simplify_to_dominant_color_combinations_with_average(tolerance, config);
+    }
+
+    [[nodiscard]] size_t configCount() const { return configs.size(); }
+};
 
 void processImageTransforms(
     const std::string& baseName ,
     const std::string& inputPath,
-    const std::vector<int>& thresholdsAndStep,
     const std::vector<float> &proportions,
     const std::vector<int>& colorNuances,
     int fraction,
     std::vector<int>& rectanglesToModify,
     const std::vector<int>&  tolerance,
-    const std::vector<float> &weightOfRGB,
+    const std::vector<float>& weightOfRGB,
     bool severalColorsByProportion,
-    bool totalBlackAndWhite,
     bool totalReversal,
     bool partial,
     bool partialInDiagonal,
-    bool alternatingBlackAndWhite,
-    bool oneColor
+    bool oneColor,
+    bool average
 );
 
 #endif
