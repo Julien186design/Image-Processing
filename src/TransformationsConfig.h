@@ -8,29 +8,26 @@
 #include <functional>
 #include <algorithm>
 #include <omp.h>
+#include  <array>
 
 #include "Image.h"
 
-using TransformationFunc = std::function<void(Image&, int)>;
-using ReverseTransformationFunc = std::function<void(Image&, int)>;
+struct ThresholdParams {
+    bool below;
+    bool dark;
+};
+
+
 using AlternatingTransformation = std::function<void(Image&, int, int, int)>;
-using PartialTransformationFunc = std::function<void(Image&, int, int, int, const std::vector<int>&)>;
+
 using PartialTransformationFuncByProportion =
     std::function<void(Image&, float, int, int, const std::vector<int>&)>;
-
-using TwoIntTransformationByThreshold = std::function<void(Image&, int, int)>;
-using TwoIntTransformationByProportion = std::function<void(Image&, float, int)>;
 
 constexpr const char* OUTPUT_FOLDER = "Output/";
 const std::string FOLDER_120 = OUTPUT_FOLDER + std::string("120/");
 const std::string FOLDER_VIDEOS = OUTPUT_FOLDER + std::string("Videos/");
 const std::string FOLDER_EDGEDETECTOR = OUTPUT_FOLDER + std::string("Edge Detector/");
 
-
-struct ThresholdParams {
-    bool below;
-    bool dark;
-};
 
 constexpr std::array<ThresholdParams, 4> transformation_params = {{
     {true, true},   // BelowDark
@@ -39,34 +36,6 @@ constexpr std::array<ThresholdParams, 4> transformation_params = {{
     {false, false}  // AboveLight
 }};
 
-
-const std::vector<PartialTransformationFuncByProportion> partial_transformations_by_proportion_func = {
-    [](Image& img,
-        const float proportion, const int cn, const int fraction, const std::vector<int>& rectanglesToModify) {
-        img.below_proportion_region_fraction(proportion, cn, fraction, rectanglesToModify, true);
-    },
-    [](Image& img,
-        const float proportion, const int cn, const int fraction, const std::vector<int>& rectanglesToModify) {
-        img.below_proportion_region_fraction(proportion, cn, fraction, rectanglesToModify, false);
-    },
-    [](Image& img,
-        const float proportion, const int cn, const int fraction, const std::vector<int>& rectanglesToModify) {
-        img.above_proportion_region_fraction(proportion, cn, fraction, rectanglesToModify, true);
-    },
-    [](Image& img,
-        const float proportion, const int cn, const int fraction, const std::vector<int>& rectanglesToModify) {
-        img.above_proportion_region_fraction(proportion, cn, fraction, rectanglesToModify, false);
-    }
-};
-
-const std::vector<AlternatingTransformation> total_alternating_black_and_white_transformations = {
-    [](Image& img, const int i, const int first_t, const int last_t) {
-        img.alternatelyDarkenAndWhitenBelowTheThreshold(i, first_t, last_t);
-    },
-    [](Image& img, const int i, const int first_t, const int last_t) {
-        img.alternatelyDarkenAndWhitenAboveTheThreshold(i, first_t, last_t);
-    }
-};
 
 const std::vector<std::string> total_step_by_step_suffixes = {
     "BTB", "BTW", "WTB", "WTW"

@@ -1,7 +1,8 @@
 #include "VideoProcessing.h"
-#include "TransformationsConfig.h"
 #include "Image.h"
 #include "ImageProcessing.h"
+#include "ProcessingConfig.h"
+#include "TransformationsConfig.h"
 #include <opencv2/opencv.hpp>
 #include <vector>
 #include <string>
@@ -32,7 +33,7 @@ void several_colors_transformations_streaming(
 
     // Calculate the number of steps and frames
     const int numSteps = static_cast<int>((proportions[1] - proportions[0]) / proportions[2]) + 1;
-    const int nFrames = numSteps * 2 * (((colorNuances[1] - colorNuances[0]) / colorNuances[2]) + 1);
+    const int nFrames = numSteps * 2 * ((colorNuances[1] - colorNuances[0]) / colorNuances[2] + 1);
 
     if (nFrames < 2 * fps) {
         std::cerr << "Video less than 2 seconds long, creation canceled" << std::endl;
@@ -228,20 +229,6 @@ void several_colors_transformations_streaming(
     std::cout << "\n" << outputVideoPath << " created\n";
 }
 
-// ============================================================
-// OneColorPipeline: encapsulates the pixel transformation logic
-// shared between oneColorTransformations (image) and
-// one_color_transformations_streaming (video).
-// ============================================================
-
-
-
-
-// ============================================================
-// one_color_transformations_streaming — video variant
-// Produces one video whose frames iterate over:
-//   configs × tolerances × average variants
-// ============================================================
 void one_color_transformations_streaming(
     const std::string& baseName,
     const std::string& inputPath,
@@ -250,6 +237,7 @@ void one_color_transformations_streaming(
     const std::vector<float>& weightOfRGB,
     const bool average
 ) {
+    // Load source image
     cv::Mat baseImageMat = cv::imread(inputPath, cv::IMREAD_COLOR);
     if (baseImageMat.empty()) {
         std::cerr << "Error: Could not load image " << inputPath << std::endl;
@@ -258,116 +246,189 @@ void one_color_transformations_streaming(
 
     const OneColorPipeline pipeline(weightOfRGB, average);
 
-    const int num_tole        = (tolerance[1] - tolerance[0]) / tolerance[2] + 1;
-    const int framesPerVariant = static_cast<int>(pipeline.configCount()) * num_tole;
-    const int nFrames          = framesPerVariant * (average ? 2 : 1);
+    // Compute tolerance count
+    const int num_tole =
+        (tolerance[1] - tolerance[0]) / tolerance[2] + 1;
 
-    if (nFrames < 2 * fps) {
-        std::cerr << "Video less than 2 seconds long, creation canceled" << std::endl;
+    // Frames per configuration (tolerance × average variants)
+    const size_t variantsPerConfig =
+        static_cast<size_t>(num_tole) * (average ? 2 : 1);
+
+    // Total number of frames
+    const size_t totalIterations =
+        pipeline.configCount() * variantsPerConfig;
+
+    const size_t nFrames = totalIterations;
+
+    if (nFrames < static_cast<size_t>(2 * fps)) {
+        std::cerr << "Video less than 2 seconds long, creation canceled\n";
         return;
     }
 
     std::cout << "Frames to process: " << nFrames << std::endl;
 
-    (void)system(("notify-send 'one_color_transformations_streaming' '" +
-    baseName + " - Frames to process: " + std::to_string(nFrames) + "'").c_str());
-
     // Build output path
-    const std::string tolStr = "{" + std::to_string(tolerance[0]) + "-"
-                                   + std::to_string(tolerance[1]) + "-"
-                                   + std::to_string(tolerance[2]) + "}";
-    const std::string outputVideoPath = std::string(FOLDER_VIDEOS) + baseName
-        + " - One Color - " + std::to_string(nFrames) + " images - "
-        + std::to_string(fps) + " fps - " + tolStr + ".mp4";
+    std::string outputVideoPath =
+        std::string(FOLDER_VIDEOS) + baseName
+        + " - One Color - "
+        + std::to_string(nFrames) + " images - "
+        + std::to_string(fps) + " fps -"
+        + writingWeightedColors(weightOfRGB, false);
 
-    cv::VideoWriter video(outputVideoPath,
-                          cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
-                          fps,
-                          cv::Size(baseImageMat.cols, baseImageMat.rows));
+    if (average) {
+        outputVideoPath += " Average.mp4";
+    } else {
+        outputVideoPath += ".mp4";
+    }
+
+    cv::VideoWriter video(
+        outputVideoPath,
+        cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
+        fps,
+        cv::Size(baseImageMat.cols, baseImageMat.rows)
+    );
 
     if (!video.isOpened()) {
-        std::cerr << "Error: Could not open video writer for " << outputVideoPath << std::endl;
+        std::cerr << "Error: Could not open video writer\n";
         return;
     }
 
-    // Queue infrastructure (identical pattern to several_colors_transformations_streaming)
-    std::queue<cv::Mat> frameQueue;
-    std::mutex          queueMutex;
-    std::condition_variable queueCV;
-    std::atomic<bool>   processingDone{false};
-    constexpr size_t    maxQueueSize = 30;
+    // ===============================
+    // Thread-safe queue infrastructure
+    // ===============================
 
+    std::queue<cv::Mat> frameQueue;
+    std::mutex queueMutex;
+    std::condition_variable queueCV;
+    std::atomic processingDone{false};
+    constexpr size_t maxQueueSize = 30;
+
+    // Dedicated writer thread
     std::thread writerThread([&]() {
         while (true) {
             std::unique_lock<std::mutex> lock(queueMutex);
-            queueCV.wait(lock, [&]{ return !frameQueue.empty() || processingDone; });
-            if (frameQueue.empty() && processingDone) break;
-            if (!frameQueue.empty()) {
-                cv::Mat frame = std::move(frameQueue.front());
-                frameQueue.pop();
-                lock.unlock();
-                queueCV.notify_one();
-                video.write(frame);
-            }
+
+            queueCV.wait(lock, [&] {
+                return !frameQueue.empty() || processingDone;
+            });
+
+            if (frameQueue.empty() && processingDone)
+                break;
+
+            cv::Mat frame = std::move(frameQueue.front());
+            frameQueue.pop();
+
+            lock.unlock();
+            queueCV.notify_one();
+
+            video.write(frame);
         }
     });
 
-    auto enqueueFrame = [&](const cv::Mat& frame) {
+    // Thread-safe enqueue function
+    auto enqueueFrame = [&](cv::Mat&& frame) {
         std::unique_lock<std::mutex> lock(queueMutex);
-        queueCV.wait(lock, [&]{ return frameQueue.size() < maxQueueSize; });
-        frameQueue.push(frame.clone());
+
+        queueCV.wait(lock, [&] {
+            return frameQueue.size() < maxQueueSize;
+        });
+
+        frameQueue.push(std::move(frame));
+
         lock.unlock();
         queueCV.notify_one();
     };
 
-    // Convert cv::Mat → Image, apply pipeline transform, convert back to cv::Mat
-    auto processAndEnqueue = [&](const cv::Mat& src,
-                                 const int tole,
-                                 const OneColorPipeline::ConfigParams& p,
-                                 const bool useAverage,
-                                 const std::vector<float>& config)
+    // Create progress notifier
+    ProgressNotifier notifier(
+        "One Color Video",
+        totalIterations);
+
+    std::atomic<std::size_t> progress{0};
+
+    // ===============================
+    // Parallel frame generation
+    // ===============================
+    const int num_threads = computeNumThreads();
+    #pragma omp parallel for collapse(1) schedule(dynamic) num_threads(num_threads) \
+    default(none) \
+    shared(baseImageMat, pipeline, tolerance, average, \
+       totalIterations, variantsPerConfig, num_tole, enqueueFrame, progress, notifier)
+    for (size_t iter = 0; iter < totalIterations; ++iter)
     {
-        // Build a temporary Image from the cv::Mat (BGR → RGB channel swap handled
-        // by writing channels in BGR order as OpenCV expects)
-        Image img(src.cols, src.rows, src.channels());
-        std::memcpy(img.data, src.data, static_cast<size_t>(src.total() * src.channels()));
+        // Determine configuration index
+        const size_t configIdx =
+            iter / variantsPerConfig;
 
+        // Local index inside configuration
+        const size_t localIdx =
+            iter % variantsPerConfig;
+
+        // Determine tolerance index
+        const int tolIdx =
+            static_cast<int>(localIdx / (average ? 2 : 1));
+
+        const int tole =
+            tolerance[0] + tolIdx * tolerance[2];
+
+        // Determine average variant
+        const bool useAverage =
+            average && (localIdx % 2 == 1);
+
+        // Precompute config parameters
+        const auto params =
+            pipeline.buildParams(configIdx);
+
+        // Build thread-local Image
+        Image img(baseImageMat.cols,
+                  baseImageMat.rows,
+                  baseImageMat.channels());
+
+        std::memcpy(img.data,
+                    baseImageMat.data,
+                    static_cast<size_t>(
+                        baseImageMat.total()
+                        * baseImageMat.channels()));
+
+        // Apply transformation
         if (useAverage) {
-            OneColorPipeline::applyWithAverage(img, tole, config);
+            OneColorPipeline::applyWithAverage(
+                img,
+                tole,
+                pipeline.configs[configIdx]);
         } else {
-            OneColorPipeline::applyWithoutAverage(img, tole, p);
+            OneColorPipeline::applyWithoutAverage(
+                img,
+                tole,
+                params);
         }
 
-        // Write result back into a cv::Mat for the video writer
-        cv::Mat result(src.rows, src.cols, src.type());
-        std::memcpy(result.data, img.data, static_cast<size_t>(result.total() * result.channels()));
-        enqueueFrame(result);
-    };
+        // Convert back to cv::Mat
+        cv::Mat result(baseImageMat.rows,
+                       baseImageMat.cols,
+                       baseImageMat.type());
 
-    // Main loop: iterate configs × tolerances, then average variants
-    int frameIdx = 0;
-    for (size_t configIdx = 0; configIdx < pipeline.configCount(); ++configIdx) {
-        const auto p = pipeline.buildParams(configIdx);
+        std::memcpy(result.data,
+                    img.data,
+                    static_cast<size_t>(
+                        result.total()
+                        * result.channels()));
 
-        for (int tole = tolerance[0]; tole <= tolerance[1]; tole += tolerance[2]) {
-            std::cout << "Frame " << ++frameIdx << "/" << nFrames
-                      << " (config " << configIdx << ", tole " << tole << ", avg=0)\r" << std::flush;
-            processAndEnqueue(baseImageMat, tole, p, false, pipeline.configs[configIdx]);
+        enqueueFrame(std::move(result));
 
-            if (average) {
-                std::cout << "Frame " << ++frameIdx << "/" << nFrames
-                          << " (config " << configIdx << ", tole " << tole << ", avg=1)\r" << std::flush;
-                processAndEnqueue(baseImageMat, tole, p, true, pipeline.configs[configIdx]);
-            }
-        }
+        // Atomically update progress
+        const std::size_t current = ++progress;
+        notifier.update(current);
     }
 
+    // Signal completion
     processingDone = true;
     queueCV.notify_one();
-    writerThread.join();
 
+    writerThread.join();
     video.release();
-    std::cout << "\n" << outputVideoPath << " created\n";
+
+    std::cout << outputVideoPath << " created\n";
 }
 
 void edge_detector_video(

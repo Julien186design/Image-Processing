@@ -212,7 +212,7 @@ ImageType Image::get_file_type(const char* filename) {
 }
 
 
-std::optional<int> Image::compute_threshold(
+std::optional<int> Image::sorting_pixels_by_brightness(
 	const float proportion,
 	const bool below
 ) const
@@ -266,13 +266,13 @@ std::optional<int> Image::compute_threshold(
 }
 
 
-Image& Image::threshold_by_proportion(
+Image& Image::proportion_complete(
 	const float proportion,
 	const int colorNuance,
 	const bool useDarkNuance,
 	const bool below
 ) {
-	const auto threshold = compute_threshold(proportion, below);
+	const auto threshold = sorting_pixels_by_brightness(proportion, below);
 	if (!threshold) return *this;
 
 	const int newColor = useDarkNuance ? colorNuance : 255 - colorNuance;
@@ -285,7 +285,7 @@ Image& Image::threshold_by_proportion(
 }
 
 Image& Image::reverse_by_proportion(const float proportion, const bool below) {
-	const auto threshold = compute_threshold(proportion, below);
+	const auto threshold = sorting_pixels_by_brightness(proportion, below);
 	if (!threshold) return *this;
 
 	const int thresh = *threshold;
@@ -409,13 +409,10 @@ Image& Image::simplify_to_dominant_color_combinations_without_average(
 }
 
 
-// Applies a black and white filter based on a proportion of pixels rather than a fixed threshold.
-// The proportion determines how many pixels will be considered as "above" or "below" the computed threshold.
-// If 'below' is true, pixels with a sum of RGB values less than or equal to the threshold are inverted.
-// Otherwise, pixels with a sum of RGB values greater than or equal to the threshold are inverted.
+
 Image& Image::black_and_white(const float proportion, const bool below) {
 	// Compute the threshold based on the given proportion of pixels
-	const auto threshold = compute_threshold(proportion, below);
+	const auto threshold = sorting_pixels_by_brightness(proportion, below);
 	if (!threshold) return *this;
 
 	const int thresh = *threshold;
@@ -438,29 +435,6 @@ Image& Image::black_and_white(const float proportion, const bool below) {
 
 	return *this;
 }
-
-
-// in construction
-Image& Image::alternatelyDarkenAndWhitenBelowTheThreshold(const int s, int first_threshold,	int last_threshold) {
-	const int threshold3 = 3 * s;
-	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
-		if (const int rgb = (data[i] + data[i+1] + data[i+2]); rgb < threshold3) {
-			data[i] = data[i + 1] = data[i + 2] = 0;
-		}
-	}
-	return *this;
-}
-
-Image& Image::alternatelyDarkenAndWhitenAboveTheThreshold(const int s, int first_threshold,	int last_threshold) {
-	const int threshold3 = 3 * s;
-	for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
-		if (const int rgb = (data[i] + data[i+1] + data[i+2]); rgb > threshold3) {
-			data[i] = data[i + 1] = data[i + 2] = 0;
-		}
-	}
-	return *this;
-}
-
 
 //fraction by rectangles
 
@@ -524,36 +498,20 @@ Image& Image::apply_proportion_transformation_region_fraction(
     return *this;
 }
 
-Image& Image::below_proportion_region_fraction(
+Image& Image::proportion_region_fraction(
     const float proportion,
     const int colorNuance,
     const int fraction,
     const std::vector<int>& rectanglesToModify,
-    const bool useDarkNuance) {
+    const bool useDarkNuance,
+    const bool below) {
 
     const int newColor = useDarkNuance ? colorNuance : 255 - colorNuance;
     return apply_proportion_transformation_region_fraction(
         proportion,
         fraction,
         rectanglesToModify,
-        true,  // below
-        [newColor]() -> uint8_t { return newColor; }
-    );
-}
-
-Image& Image::above_proportion_region_fraction(
-    const float proportion,
-    const int colorNuance,
-    const int fraction,
-    const std::vector<int>& rectanglesToModify,
-    const bool useDarkNuance) {
-
-    const int newColor = useDarkNuance ? colorNuance : 255 - colorNuance;
-    return apply_proportion_transformation_region_fraction(
-        proportion,
-        fraction,
-        rectanglesToModify,
-        false,  // above
+        below,
         [newColor]() -> uint8_t { return newColor; }
     );
 }
@@ -585,14 +543,14 @@ Image& Image::std_convolve_clamp_to_0(const int channel, const int ker_w, const 
 
     // Vérification des dimensions de l'image
     if (w <= 0 || h <= 0 || data == nullptr) {
-        fprintf(stderr, "Erreur : Image invalide (dimensions ou données incorrectes).\n");
+        fprintf(stderr, "Erreur : Image invalide (incorrect dimensions or data).\n");
         return *this;
     }
 
     // Allocation dynamique du buffer temporaire
     auto *new_data = new uint8_t[w * h];
     if (new_data == nullptr) {
-        fprintf(stderr, "Erreur : Échec de l'allocation mémoire pour new_data.\n");
+        fprintf(stderr, "Error: Memory allocation failed for new_data.\n");
         return *this;
     }
 
@@ -666,7 +624,7 @@ Image& Image::std_convolve_clamp_to_border(const uint8_t channel, const uint32_t
 				} else if(col > w-1) {
 					col = w-1;
 				}
-				uint64_t ker_idx = center + i * static_cast<long>(ker_w) + j;
+				const uint64_t ker_idx = center + i * static_cast<long>(ker_w) + j;
 				c += ker[ker_idx] * data[(row * w + col) * channels + channel];
 			}
 		}
@@ -681,7 +639,7 @@ Image& Image::std_convolve_clamp_to_border(const uint8_t channel, const uint32_t
 
 Image& Image::std_convolve_cyclic(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc) {
 	uint8_t new_data[w*h];
-	uint64_t center = cr*ker_w + cc;
+	const uint64_t center = cr*ker_w + cc;
 	for(uint64_t k=channel; k<size; k+=channels) {
 		double c = 0;
 		for(long i = -(static_cast<long>(cr)); i<static_cast<long>(ker_h)-cr; ++i) {
@@ -713,8 +671,6 @@ Image& Image::std_convolve_cyclic(uint8_t channel, uint32_t ker_w, uint32_t ker_
 
 
 
-
-
 uint32_t Image::rev(uint32_t n, uint32_t a) {
 	auto max_bits = static_cast<uint8_t>(ceil(log2(n)));
 	uint32_t reversed_a = 0;
@@ -726,7 +682,7 @@ uint32_t Image::rev(uint32_t n, uint32_t a) {
 	return reversed_a;
 }
 
-void Image::bit_rev(uint32_t n, std::complex<double> a[], std::complex<double>* A) {
+void Image::bit_rev(const uint32_t n, std::complex<double> a[], std::complex<double>* A) {
 	for(uint32_t i=0; i<n; ++i) {
 		A[rev(n,i)] = a[i];
 	}
@@ -747,8 +703,8 @@ void Image::fft(uint32_t n, std::complex<double> x[], std::complex<double>* X) {
 		std::complex<double> w_step(cos(-2 * M_PI / sub_prob_size), sin(-2 * M_PI / sub_prob_size));
 
 		for (uint32_t i = 0; i < sub_probs; ++i) {
-			uint32_t j_begin = i * sub_prob_size;
-			uint32_t j_end = j_begin + half;
+			const uint32_t j_begin = i * sub_prob_size;
+			const uint32_t j_end = j_begin + half;
 			std::complex<double> w(1, 0);
 
 			for (uint32_t j = j_begin; j < j_end; ++j) {
@@ -782,8 +738,8 @@ void Image::ifft(uint32_t n, std::complex<double> X[], std::complex<double>* x) 
 		std::complex<double> w_step(cos(2 * M_PI / sub_prob_size), sin(2 * M_PI / sub_prob_size));
 
 		for (uint32_t i = 0; i < sub_probs; ++i) {
-			uint32_t j_begin = i * sub_prob_size;
-			uint32_t j_end = j_begin + half;
+			const uint32_t j_begin = i * sub_prob_size;
+			const uint32_t j_end = j_begin + half;
 			std::complex<double> w(1, 0);
 
 			for (uint32_t j = j_begin; j < j_end; ++j) {

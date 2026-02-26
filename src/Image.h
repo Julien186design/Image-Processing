@@ -140,12 +140,9 @@ struct Image {
 
 	Image& grayscale_avg();
 
-	std::optional<int> compute_threshold(float proportion, bool below) const;
-	Image& threshold_by_proportion(float proportion, int colorNuance, bool useDarkNuance, bool below);
+	std::optional<int> sorting_pixels_by_brightness(float proportion, bool below) const;
+	Image& proportion_complete(float proportion, int colorNuance, bool useDarkNuance, bool below);
 	Image& reverse_by_proportion(float proportion, bool below);
-
-	Image& alternatelyDarkenAndWhitenBelowTheThreshold(int s, int first_threshold,	int last_threshold);
-	Image& alternatelyDarkenAndWhitenAboveTheThreshold(int s, int first_threshold,	int last_threshold);
 
 	Image& black_and_white(float proportion, bool below);
 
@@ -172,10 +169,8 @@ struct Image {
 		TransformFunc transformation
 	);
 
-	Image& below_proportion_region_fraction(float proportion, int colorNuance, int fraction,
-	const std::vector<int>& rectanglesToModify, bool useDarkNuance);
-	Image& above_proportion_region_fraction(float proportion, int colorNuance, int fraction,
-		const std::vector<int>& rectanglesToModify, bool useDarkNuance);
+	Image& proportion_region_fraction(float proportion, int colorNuance, int fraction,
+	const std::vector<int>& rectanglesToModify, bool useDarkNuance, bool below);
 
 	Image& grayscale_lum();
 
@@ -192,7 +187,6 @@ struct Image {
 	Image& overlayText(const char* txt, const Font& font, int x, int y, uint8_t r = 255, uint8_t g = 255, uint8_t b = 255, uint8_t a = 255);
 
 	Image& crop(uint16_t cx, uint16_t cy, uint16_t cw, uint16_t ch);
-
 
 	Image& resizeNN(uint16_t nw, uint16_t nh);
 
@@ -227,7 +221,7 @@ private:
 public:
 
     // Constructor: allocate all buffers once
-    EdgeDetectorPipeline(int w, int h, double thresh = 0.09)
+    EdgeDetectorPipeline(const int w, const int h, const double thresh = 0.09)
         : width(w),
           height(h),
           imgSize(static_cast<size_t>(w) * h),
@@ -266,7 +260,7 @@ public:
         {
             for (int c = 1; c < width - 1; ++c)
             {
-                size_t idx = static_cast<size_t>(r) * width + c;
+                const size_t idx = static_cast<size_t>(r) * width + c;
 
                 tx[idx] = blurData[idx + 1] - blurData[idx - 1];
 
@@ -336,16 +330,16 @@ public:
         #pragma omp parallel for schedule(static)
         for (size_t k = 0; k < imgSize; ++k)
         {
-            double h = theta[k] * 180.0 / M_PI + 180.0;
+            const double h = theta[k] * 180.0 / M_PI + 180.0;
             double v = (mx == mn) ? 0.0 : (g[k] - mn) / (mx - mn);
             v = (v > threshold) ? v : 0.0;
 
-            double s = v;
-            double l = v;
+            const double s = v;
+            const double l = v;
 
-            double c = (1.0 - std::fabs(2.0 * l - 1.0)) * s;
-            double x = c * (1.0 - std::fabs(std::fmod(h / 60.0, 2.0) - 1.0));
-            double m = l - c / 2.0;
+            const double c = (1.0 - std::fabs(2.0 * l - 1.0)) * s;
+            const double x = c * (1.0 - std::fabs(std::fmod(h / 60.0, 2.0) - 1.0));
+            const double m = l - c / 2.0;
 
             double rt = 0.0, gt = 0.0, bt = 0.0;
 

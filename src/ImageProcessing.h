@@ -1,7 +1,6 @@
 #ifndef IMAGE_PROCESSOR_H
 #define IMAGE_PROCESSOR_H
 #include "Image.h"
-#include "TransformationsConfig.h"
 
 #include <string>
 #include <vector>
@@ -75,11 +74,6 @@ public:
     }
 };
 
-struct WeightedColors {
-    uint8_t r_third, g_third, b_third;
-    uint8_t r_half, g_half, b_half;
-    uint8_t r_full, g_full, b_full;
-};
 
 inline std::vector<int> genererRectanglesInDiagonal(const int fraction) {
     if (fraction <= 0) return {};
@@ -112,7 +106,11 @@ inline std::vector<int> range_to_vector(const std::vector<int>& input) {
     return vector;
 }
 
-
+struct WeightedColors {
+    uint8_t r_third, g_third, b_third;
+    uint8_t r_half, g_half, b_half;
+    uint8_t r_full, g_full, b_full;
+};
 
 inline WeightedColors calculateWeightedColors(
     const std::vector<float>& weightOfRGB) {
@@ -131,35 +129,46 @@ inline WeightedColors calculateWeightedColors(
     };
 }
 
-inline std::string makeWeightedColors(const std::vector<float>& weightOfRGB) {
+inline std::string writingWeightedColors(const std::vector<float>& weightOfRGB, const bool integerMode) {
     std::string s;
-    s.reserve(32); // to avoid several allocations
+    s.reserve(32);
+    s += " {";
 
-    s += ' ';
-    s += std::format("{:.2f}", weightOfRGB[0]);
-    s += '-';
-    s += std::format("{:.2f}", weightOfRGB[1]);
-    s += '-';
-    s += std::format("{:.2f}", weightOfRGB[2]);
-
+    for (size_t i = 0; i < 3; ++i) {
+        if (i > 0) s += '-';
+        float val = weightOfRGB[i];
+        if (integerMode) {
+            s += std::to_string(static_cast<int>(val));  // ✅ Parfait, zéro overhead
+        } else {
+            s += std::format("{:.2f}", val);
+        }
+    }
+    s += '}';
     return s;
 }
 
-
-inline std::vector<std::vector<float>> generateColorConfigs(const std::vector<float> &weightOfRGB) {
+inline std::vector<std::vector<float>> generateColorConfigs(
+    const std::vector<float>& weightOfRGB,
+    const bool binaryOnly = false)         // if true, only {0,1}^3 \ {0,0,0} configs
+{
     const int n = static_cast<int>((weightOfRGB[1] - weightOfRGB[0]) / weightOfRGB[2]);
     const int total_configs = (n + 1) * (n + 1) * (n + 1);
 
     std::vector<std::vector<float>> configs;
-    configs.reserve(total_configs);
+    configs.reserve(binaryOnly ? 7 : total_configs);
 
     for (int i = 0; i <= n; ++i) {
         for (int j = 0; j <= n; ++j) {
             for (int k = 0; k <= n; ++k) {
+                // When binaryOnly: keep only indices in {0,1}, skip (0,0,0)
+                if (binaryOnly) {
+                    if (i < n && i > 0 || j < n && j > 0 || k < n && k > 0) continue;
+                    if ((i | j | k) == 0) continue;        // exclut {0,0,0}
+                }
                 configs.push_back({
-                weightOfRGB[0] + k * weightOfRGB[2],
-                weightOfRGB[0] + j * weightOfRGB[2],
-                weightOfRGB[0] + i * weightOfRGB[2]
+                    weightOfRGB[0] + k * weightOfRGB[2],
+                    weightOfRGB[0] + j * weightOfRGB[2],
+                    weightOfRGB[0] + i * weightOfRGB[2]
                 });
             }
         }
@@ -171,9 +180,17 @@ inline std::vector<std::vector<float>> generateColorConfigs(const std::vector<fl
 struct OneColorPipeline {
     const std::vector<std::vector<float>> configs;
     const bool average;
+    const bool integerMode;
 
-    explicit OneColorPipeline(const std::vector<float>& weightOfRGB, const bool average)
-        : configs(generateColorConfigs(weightOfRGB)), average(average) {}
+    explicit OneColorPipeline(
+        const std::vector<float>& weightOfRGB,
+        const bool average,
+        const bool binaryOnly = false,
+        const bool integerMode = false)
+        : configs(generateColorConfigs(weightOfRGB, binaryOnly))
+        , average(average)
+        , integerMode(integerMode)
+    {}
 
     struct ConfigParams {
         uint8_t r_third, g_third, b_third;
@@ -191,7 +208,7 @@ struct OneColorPipeline {
         return { r_third, g_third, b_third,
                  r_half,  g_half,  b_half,
                  r_full,  g_full,  b_full,
-                 makeWeightedColors(config) };
+                 writingWeightedColors(config, integerMode) };
     }
 
     // Apply without_average transform to an Image in-place
@@ -219,7 +236,7 @@ void processImageTransforms(
     const std::vector<float> &proportions,
     const std::vector<int>& colorNuances,
     int fraction,
-    std::vector<int>& rectanglesToModify,
+    const std::vector<int>& rectangles,
     const std::vector<int>&  tolerance,
     const std::vector<float>& weightOfRGB,
     bool severalColorsByProportion,
