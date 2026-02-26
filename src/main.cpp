@@ -1,7 +1,7 @@
 #include "ImageProcessing.h"
 #include "ProcessingConfig.h"
 #include <chrono>
-#include <cstdlib> // Required for system()
+#include <cstdlib>
 
 int main() {
 	const auto start = std::chrono::high_resolution_clock::now();
@@ -16,8 +16,9 @@ int main() {
     printf("Execution time: %ld s\n", duration.count());
 
     // Send a desktop notification when the program finishes
-    (void)system(("notify-send 'Program Execution Complete' '" +
-        baseName + " - The image and video processing has finished.'").c_str());
+    const std::string notificationMessage = baseName + "\nThe image and video processing has finished in " +
+                                            std::to_string(duration.count()) + " seconds.";
+    sendNotification("Program Execution Complete", notificationMessage);
 
     return 0;
 }
