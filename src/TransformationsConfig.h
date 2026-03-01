@@ -1,93 +1,99 @@
 #pragma once
 
-// Define THREAD_OFFSET according to your needs
-#define THREAD_OFFSET 1  // Example: use all threads minus 1
+#include "Image.h"
+#include "ProcessingConfig.h"
 
 #include <vector>
 #include <string>
 #include <functional>
 #include <algorithm>
-#include <omp.h>
-#include  <array>
+#include <array>
 
-#include "Image.h"
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 struct ThresholdParams {
     bool below;
     bool dark;
 };
 
-
 using AlternatingTransformation = std::function<void(Image&, int, int, int)>;
-
 using PartialTransformationFuncByProportion =
     std::function<void(Image&, float, int, int, const std::vector<int>&)>;
 
-constexpr const char* OUTPUT_FOLDER = "Output/";
-const std::string FOLDER_120 = OUTPUT_FOLDER + std::string("120/");
-const std::string FOLDER_VIDEOS = OUTPUT_FOLDER + std::string("Videos/");
-const std::string FOLDER_EDGEDETECTOR = OUTPUT_FOLDER + std::string("Edge Detector/");
 
+// ─── Threshold parameter sets ─────────────────────────────────────────────────
 
 constexpr std::array<ThresholdParams, 4> transformation_params = {{
-    {true, true},   // BelowDark
-    {true, false},  // BelowLight
-    {false, true},  // AboveDark
-    {false, false}  // AboveLight
+    {true,  true },  // BelowDark
+    {true,  false},  // BelowLight
+    {false, true },  // AboveDark
+    {false, false}   // AboveLight
 }};
 
+// ─── Transformation entry: groups a suffix with its output directory ──────────
 
-const std::vector<std::string> total_step_by_step_suffixes = {
-    "BTB", "BTW", "WTB", "WTW"
+struct TransformationEntry {
+    std::string suffix;
+    std::string output_dir;
+
+    // Returns the "partial/square" variant of this entry
+    [[nodiscard]] TransformationEntry partial() const {
+        std::string dir = output_dir;
+        if (!dir.empty() && dir.back() == '/')
+            dir.pop_back();
+        return { suffix + " Partial", dir + " Square/" };
+    }
 };
 
-const std::vector<std::string> reversal_step_by_step_suffixes = {
-    "Reversal-BT", "Reversal-WT"
+// ─── Step-by-step transformations (BTB, BTW, WTB, WTW) ───────────────────────
+
+const std::vector<TransformationEntry> total_step_by_step_entries = {
+    { "BTB", std::string(output_folder) + "BTB/" },
+    { "BTW", std::string(output_folder) + "BTW/" },
+    { "WTB", std::string(output_folder) + "WTB/" },
+    { "WTW", std::string(output_folder) + "WTW/" },
 };
 
-const std::vector<std::string> total_black_and_white_suffixes = {
-    "Black and white - Original", "Black and white - Reversed"
+// ─── Reversal transformations ─────────────────────────────────────────────────
+
+const std::vector<TransformationEntry> reversal_step_by_step_entries = {
+    { "Reversal-BT", std::string(output_folder) + "Reversal-BT/" },
+    { "Reversal-WT", std::string(output_folder) + "Reversal-WT/" },
 };
 
+// ─── Black-and-white transformations ─────────────────────────────────────────
 
-const std::vector total_step_by_step_output_dirs = {
-    std::string(OUTPUT_FOLDER) + "BTB/", std::string(OUTPUT_FOLDER) + "BTW/",
-    std::string(OUTPUT_FOLDER) + "WTB/", std::string(OUTPUT_FOLDER) + "WTW/"
+const std::vector<TransformationEntry> total_black_and_white_entries = {
+    { "Black and white - Original", std::string(output_folder) + "Original black and white/" },
+    { "Black and white - Reversed", std::string(output_folder) + "Reversed black and white/" },
 };
 
-const std::vector reversal_step_by_step_output_dirs = {
-    std::string(OUTPUT_FOLDER) + "Reversal-BT/", std::string(OUTPUT_FOLDER) + "Reversal-WT/"
-};
+// ─── Helpers to extract suffixes / dirs from an entry list ───────────────────
 
-const std::vector total_black_and_white_output_dirs = {
-    std::string(OUTPUT_FOLDER) + "Original black and white/",
-    std::string(OUTPUT_FOLDER) + "Reversed black and white/"
-};
-
-inline std::vector<std::string>  generatePartialSuffixes() {
-    std::vector<std::string> partialSuffixes;
-    std::ranges::transform(
-        total_step_by_step_suffixes,
-        std::back_inserter(partialSuffixes),
-        [](const std::string& s) { return s + " Partial"; }
-    );
-    return partialSuffixes;
+inline std::vector<std::string> getSuffixes(const std::vector<TransformationEntry>& entries) {
+    std::vector<std::string> result;
+    result.reserve(entries.size());
+    std::ranges::transform(entries, std::back_inserter(result),
+        [](const TransformationEntry& e) { return e.suffix; });
+    return result;
 }
 
-inline int computeNumThreads() {
-    return std::max(1, omp_get_max_threads() - THREAD_OFFSET);
+inline std::vector<std::string> getOutputDirs(const std::vector<TransformationEntry>& entries) {
+    std::vector<std::string> result;
+    result.reserve(entries.size());
+    std::ranges::transform(entries, std::back_inserter(result),
+        [](const TransformationEntry& e) { return e.output_dir; });
+    return result;
 }
 
-inline std::vector<std::string> generatePartialOutputDirs() {
-    std::vector<std::string> partialOutputDirs;
-    std::ranges::transform(
-        total_step_by_step_output_dirs,
-        std::back_inserter(partialOutputDirs),
-        [](const std::string& s) {
-            if (s.empty()) return s;
-            return s.substr(0, s.size() - 1) + " Square/";
-        }
-    );
-    return partialOutputDirs;
-}
+// ─── Partial variant generation ───────────────────────────────────────────────
 
+inline std::vector<TransformationEntry> generatePartialEntries(
+    const std::vector<TransformationEntry>& entries)
+{
+    std::vector<TransformationEntry> result;
+    result.reserve(entries.size());
+    std::ranges::transform(entries, std::back_inserter(result),
+        [](const TransformationEntry& e) { return e.partial(); });
+    return result;
+}
