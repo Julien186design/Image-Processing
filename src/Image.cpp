@@ -8,22 +8,20 @@
  *Working directory : $PROJECT8DIR$ | /[...]/CLion Projects/Image Processing
 
 */
+#include "Image.h"
+#include "TransformationsConfig.h"
+#include "ProcessingConfig.h"
+
 #include <stb_image.h>
 #include <stb_image_write.h>
-#include <immintrin.h>
-#include <cstdint>
-#include <cstring>
 #include <cstdio>
 #include <algorithm>
-#include <fmt/color.h>
 #include <cmath>     // for std::round
 #include <ranges>
 #include <vector>
 #include <omp.h>
 #include <optional>
 #include <array>
-#include "Image.h"
-#include "TransformationsConfig.h"
 
 EdgeDetectorResult process_edge_detection_core(
     const uint8_t* grayData,
@@ -211,98 +209,6 @@ ImageType Image::get_file_type(const char* filename) {
 	return PNG;
 }
 
-
-std::optional<int> Image::sorting_pixels_by_brightness(
-	const float proportion,
-	const bool below
-) const
-{
-	// Reject invalid proportions
-	if (proportion <= 0.0f || proportion >= 1.0f)
-		return std::nullopt;
-
-	// Number of pixels (assuming RGB interleaved)
-	const size_t pixelCount = size / static_cast<size_t>(channels);
-
-	// Histogram for possible RGB sums [0, 765] (765 = 3 * 255)
-	std::array<size_t, 766> histogram{};
-	histogram.fill(0);
-
-	// Build histogram
-	for (size_t i = 0; i < size; i += static_cast<size_t>(channels))
-	{
-		const int sum = data[i] + data[i + 1] + data[i + 2];
-		++histogram[sum];
-	}
-
-	// Target rank in sorted order
-	const size_t targetRank =
-		static_cast<float>(pixelCount) * proportion;
-
-	size_t cumulative = 0;
-
-	if (below)
-	{
-		// Traverse from darkest to brightest
-		for (int value = 0; value <= 765; ++value)
-		{
-			cumulative += histogram[value];
-			if (cumulative > targetRank)
-				return value;
-		}
-	}
-	else
-	{
-		// Traverse from brightest to darkest
-		for (int value = 765; value >= 0; --value)
-		{
-			cumulative += histogram[value];
-			if (cumulative > targetRank)
-				return value;
-		}
-	}
-
-	return std::nullopt; // Should not happen
-}
-
-
-Image& Image::proportion_complete(
-	const float proportion,
-	const int colorNuance,
-	const bool useDarkNuance,
-	const bool below
-) {
-	const auto threshold = sorting_pixels_by_brightness(proportion, below);
-	if (!threshold) return *this;
-
-	const int newColor = useDarkNuance ? colorNuance : 255 - colorNuance;
-	for (size_t i = 0; i < size; i += static_cast<size_t>(channels)) {
-		if (const int sum = data[i] + data[i + 1] + data[i + 2]; (below && sum <= *threshold) ||
-			(!below && sum >= *threshold))
-			data[i] = data[i + 1] = data[i + 2] = newColor;
-	}
-	return *this;
-}
-
-Image& Image::reverse_by_proportion(const float proportion, const bool below) {
-	const auto threshold = sorting_pixels_by_brightness(proportion, below);
-	if (!threshold) return *this;
-
-	const int thresh = *threshold;
-	const auto cmp = below
-		? [](const int sum, const int t){ return sum <= t; }
-		: [](const int sum, const int t){ return sum >= t; };
-
-	for (size_t i = 0; i < size; i += channels) {
-		if (cmp(data[i] + data[i+1] + data[i+2], thresh)) {
-			data[i]   = 255 - data[i];
-			data[i+1] = 255 - data[i+1];
-			data[i+2] = 255 - data[i+2];
-		}
-	}
-	return *this;
-}
-
 void Image::simplify_pixel(
 	uint8_t& r, uint8_t& g, uint8_t& b,
 	const uint8_t r_val_third, const uint8_t g_val_third, const uint8_t b_val_third,
@@ -408,7 +314,94 @@ Image& Image::simplify_to_dominant_color_combinations_without_average(
 	return *this;
 }
 
+std::optional<int> Image::sorting_pixels_by_brightness(const float proportion, const bool below) const
+{
+	// Reject invalid proportions
+	if (proportion <= 0.0f || proportion > 1.0f)
+		return std::nullopt;
 
+	// Number of pixels (assuming RGB interleaved)
+	const size_t pixelCount = size / static_cast<size_t>(channels);
+
+	// Histogram for possible RGB sums [0, 765] (765 = 3 * 255)
+	std::array<size_t, 766> histogram{};
+	histogram.fill(0);
+
+	// Build histogram
+	for (size_t i = 0; i < size; i += static_cast<size_t>(channels))
+	{
+		const int sum = data[i] + data[i + 1] + data[i + 2];
+		++histogram[sum];
+	}
+
+	// Target rank in sorted order
+	const size_t targetRank =
+		static_cast<float>(pixelCount) * proportion;
+
+	size_t cumulative = 0;
+
+	if (below)
+	{
+		// Traverse from darkest to brightest
+		for (int value = 0; value <= 765; ++value)
+		{
+			cumulative += histogram[value];
+			if (cumulative > targetRank)
+				return value;
+		}
+		return 765;
+	}
+	else
+	{
+		// Traverse from brightest to darkest
+		for (int value = 765; value >= 0; --value)
+		{
+			cumulative += histogram[value];
+			if (cumulative > targetRank)
+				return value;
+		}
+		return 0;
+	}
+
+	return std::nullopt; // Should not happen
+}
+
+Image& Image::proportion_complete(
+	const float proportion,
+	const int colorNuance,
+	const bool useDarkNuance,
+	const bool below
+) {
+	const auto threshold = sorting_pixels_by_brightness(proportion, below);
+	if (!threshold) return *this;
+
+	const int newColor = useDarkNuance ? colorNuance : 255 - colorNuance;
+	for (size_t i = 0; i < size; i += static_cast<size_t>(channels)) {
+		if (const int sum = data[i] + data[i + 1] + data[i + 2]; (below && sum <= *threshold) ||
+			(!below && sum >= *threshold))
+			data[i] = data[i + 1] = data[i + 2] = newColor;
+	}
+	return *this;
+}
+
+Image& Image::reverse_by_proportion(const float proportion, const bool below) {
+	const auto threshold = sorting_pixels_by_brightness(proportion, below);
+	if (!threshold) return *this;
+
+	const int thresh = *threshold;
+	const auto cmp = below
+		? [](const int sum, const int t){ return sum <= t; }
+		: [](const int sum, const int t){ return sum >= t; };
+
+	for (size_t i = 0; i < size; i += channels) {
+		if (cmp(data[i] + data[i+1] + data[i+2], thresh)) {
+			data[i]   = 255 - data[i];
+			data[i+1] = 255 - data[i+1];
+			data[i+2] = 255 - data[i+2];
+		}
+	}
+	return *this;
+}
 
 Image& Image::black_and_white(const float proportion, const bool below) {
 	// Compute the threshold based on the given proportion of pixels
@@ -446,7 +439,7 @@ Image& Image::apply_proportion_transformation_region_fraction(
     const bool below,  // true = below, false = above
     TransformFunc transformation
 ) {
-    if (rectanglesToModify.empty() || proportion <= 0.0f || proportion >= 1.0f) return *this;
+    if (rectanglesToModify.empty() || proportion <= 0.0f || proportion > 1.0f) return *this;
 
     const int numRectanglesPerRow = 1 << fraction;
     const int totalRectangles = numRectanglesPerRow * numRectanglesPerRow;
@@ -482,7 +475,9 @@ Image& Image::apply_proportion_transformation_region_fraction(
         } else {
             std::ranges::sort(sortedValues, std::greater{});
         }
-        const int threshold = sortedValues[static_cast<size_t>(static_cast<float>(regionPixelCount) * proportion)];
+    	const auto index = static_cast<size_t>((regionPixelCount - 1) * proportion);
+
+    	const int threshold = sortedValues[index];
 
         for (int y = startY; y < endY; ++y) {
             const size_t rowOffset = y * w * channels;
@@ -605,7 +600,7 @@ Image& Image::std_convolve_clamp_to_0(const int channel, const int ker_w, const 
 
 
 Image& Image::std_convolve_clamp_to_border(const uint8_t channel, const uint32_t ker_w,
-	const uint32_t ker_h, double ker[], const uint32_t cr, const uint32_t cc) {
+	const uint32_t ker_h, const double ker[], const uint32_t cr, const uint32_t cc) {
 	uint8_t new_data[w*h];
 	const uint64_t center = cr*ker_w + cc;
 	for(uint64_t k=channel; k<size; k+=channels) {
@@ -637,7 +632,7 @@ Image& Image::std_convolve_clamp_to_border(const uint8_t channel, const uint32_t
 }
 
 
-Image& Image::std_convolve_cyclic(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc) {
+Image& Image::std_convolve_cyclic(const uint8_t channel, const uint32_t ker_w, const uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc) {
 	uint8_t new_data[w*h];
 	const uint64_t center = cr*ker_w + cc;
 	for(uint64_t k=channel; k<size; k+=channels) {
@@ -671,8 +666,8 @@ Image& Image::std_convolve_cyclic(uint8_t channel, uint32_t ker_w, uint32_t ker_
 
 
 
-uint32_t Image::rev(uint32_t n, uint32_t a) {
-	auto max_bits = static_cast<uint8_t>(ceil(log2(n)));
+uint32_t Image::rev(const uint32_t n, const uint32_t a) {
+	const auto max_bits = static_cast<uint8_t>(ceil(log2(n)));
 	uint32_t reversed_a = 0;
 	for(uint8_t i=0; i<max_bits; ++i) {
 		if(a & (1<<i)) {
@@ -688,7 +683,7 @@ void Image::bit_rev(const uint32_t n, std::complex<double> a[], std::complex<dou
 	}
 }
 
-void Image::fft(uint32_t n, std::complex<double> x[], std::complex<double>* X) {
+void Image::fft(const uint32_t n, std::complex<double> x[], std::complex<double>* X) {
 	// x in standard order
 	if (x != X) {
 		memcpy(X, x, n * sizeof(std::complex<double>));
@@ -699,7 +694,7 @@ void Image::fft(uint32_t n, std::complex<double> x[], std::complex<double>* X) {
 	uint32_t sub_prob_size = n;
 
 	while (sub_prob_size > 1) {
-		uint32_t half = sub_prob_size >> 1;
+		const uint32_t half = sub_prob_size >> 1;
 		std::complex<double> w_step(cos(-2 * M_PI / sub_prob_size), sin(-2 * M_PI / sub_prob_size));
 
 		for (uint32_t i = 0; i < sub_probs; ++i) {
@@ -734,8 +729,8 @@ void Image::ifft(uint32_t n, std::complex<double> X[], std::complex<double>* x) 
 	uint32_t half = 1;
 
 	while (half < n) {
-		uint32_t sub_prob_size = half << 1;
-		std::complex<double> w_step(cos(2 * M_PI / sub_prob_size), sin(2 * M_PI / sub_prob_size));
+		const uint32_t sub_prob_size = half << 1;
+		const std::complex<double> w_step(cos(2 * M_PI / sub_prob_size), sin(2 * M_PI / sub_prob_size));
 
 		for (uint32_t i = 0; i < sub_probs; ++i) {
 			const uint32_t j_begin = i * sub_prob_size;
@@ -762,7 +757,7 @@ void Image::ifft(uint32_t n, std::complex<double> X[], std::complex<double>* x) 
 }
 
 
-void Image::dft_2D(uint32_t m, uint32_t n, std::complex<double> x[], std::complex<double>* X) {
+void Image::dft_2D(const uint32_t m, const uint32_t n, std::complex<double> x[], std::complex<double>* X) {
 	//x in row-major & standard order
 	auto* intermediate = new std::complex<double>[m*n];
 	//rows
