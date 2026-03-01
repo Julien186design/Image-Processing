@@ -1,15 +1,14 @@
 #ifndef IMAGE_PROCESSOR_H
 #define IMAGE_PROCESSOR_H
 #include "Image.h"
+#include "ProcessingConfig.h"
+#include "TransformationsConfig.h"
 
 #include <string>
 #include <vector>
-#include <sstream>
 #include <functional>
 #include <cstring>
-#include <algorithm> // for std::min et std::max
 #include <format>
-
 
 using GenericTransformationFunc = std::function<void(Image&, int, const std::vector<int>&)>;
 using GenericTransformationFuncWithColorNuances = std::function<void(Image&, int, int, int, const std::vector<int>&)>;
@@ -47,64 +46,6 @@ public:
     }
 };
 
-class OutputPathBuilder {
-public:
-    static std::string buildStandard(
-        const std::string& outputDir,
-        const std::string& baseName,
-        const std::string& transformationType,
-        const std::string& suffix,
-        const int threshold
-    ) {
-        std::ostringstream oss;
-        oss << outputDir << baseName << transformationType << suffix
-            << " " << threshold;
-        return oss.str();
-    }
-
-    static std::string build120(
-        const std::string& folder120,
-        const std::string& baseName,
-        const std::string& transformationType,
-        const std::string& suffix
-    ) {
-        std::ostringstream oss;
-        oss << folder120 << baseName << transformationType << suffix;
-        return oss.str();
-    }
-};
-
-
-inline std::vector<int> genererRectanglesInDiagonal(const int fraction) {
-    if (fraction <= 0) return {};
-    const int taille = 1 << fraction;  // 2^fraction via bit-shift
-    const int pas = taille + 1;
-
-    std::vector<int> vector;
-    vector.reserve(taille);
-
-    vector.push_back(-1);
-    for (int i = 0; i < taille; ++i) {
-        vector.push_back(i * pas);
-    }
-    return vector;
-}
-
-
-inline std::vector<int> range_to_vector(const std::vector<int>& input) {
-    if (input.size() != 2) {
-        return {}; // Retourne un vecteur vide si l'entrée n'a pas 2 éléments
-    }
-
-    const int start = std::min(input[0], input[1]);
-    const int end = std::max(input[0], input[1]);
-
-    std::vector<int> vector;
-    for (int i = start; i <= end; ++i) {
-        vector.push_back(i);
-    }
-    return vector;
-}
 
 struct WeightedColors {
     uint8_t r_third, g_third, b_third;
@@ -129,23 +70,6 @@ inline WeightedColors calculateWeightedColors(
     };
 }
 
-inline std::string writingWeightedColors(const std::vector<float>& weightOfRGB, const bool integerMode) {
-    std::string s;
-    s.reserve(32);
-    s += " {";
-
-    for (size_t i = 0; i < 3; ++i) {
-        if (i > 0) s += '-';
-        float val = weightOfRGB[i];
-        if (integerMode) {
-            s += std::to_string(static_cast<int>(val));  // ✅ Parfait, zéro overhead
-        } else {
-            s += std::format("{:.2f}", val);
-        }
-    }
-    s += '}';
-    return s;
-}
 
 inline std::vector<std::vector<float>> generateColorConfigs(
     const std::vector<float>& weightOfRGB,
@@ -208,7 +132,7 @@ struct OneColorPipeline {
         return { r_third, g_third, b_third,
                  r_half,  g_half,  b_half,
                  r_full,  g_full,  b_full,
-                 writingWeightedColors(config, integerMode) };
+                 OutputPathBuilder::writingWeightedColors(config, integerMode) };
     }
 
     // Apply without_average transform to an Image in-place
@@ -230,21 +154,78 @@ struct OneColorPipeline {
     [[nodiscard]] size_t configCount() const { return configs.size(); }
 };
 
+// Processes a single reversal at a fixed proportion value (used for the p=0.5 edge case).
+// Defined inline to avoid ODR violations across translation units.
+inline void reverse_at_proportion(
+    const Image& baseImage,
+    const std::string& baseName,
+    const float p
+) {
+    for (size_t i = 0; i < reversal_step_by_step_entries.size(); ++i) {
+        const auto& [suffix, output_dir] = reversal_step_by_step_entries[i];
+        const bool below = (i == 0);
+
+        ImageBuffer modified(baseImage.w, baseImage.h, baseImage.channels);
+        modified.resetFrom(baseImage);
+        modified.get().reverse_by_proportion(p, below);
+
+        std::string outputPath = OutputPathBuilder::reverse(output_dir, baseName, suffix, p);
+        modified.saveAs(outputPath.c_str());
+    }
+}
+
+template<typename ApplyFunc, typename PathFunc>
+void run_transformations_by_proportion(
+    const Image& baseImage,
+    const std::string& baseName,
+    const PropRange& proportions,
+    const std::vector<TransformationEntry>& entries,
+    ApplyFunc apply,
+    PathFunc buildPath,
+    const std::vector<int>* colorNuances = nullptr
+) {
+    const int num_threads = computeNumThreads();
+    const size_t num_props =
+        static_cast<size_t>((proportions.stop - proportions.start) / proportions.step) + 1;
+
+    // Executes one (proportion, entry, color nuance) triplet:
+    // resets buffer, applies transform, saves if apply() did not skip.
+    auto process_one = [&](const float p, const size_t i, const int cn) {
+        const auto& [suffix, output_dir] = entries[i];
+        ImageBuffer modified(baseImage.w, baseImage.h, baseImage.channels);
+        modified.resetFrom(baseImage);
+        if (!apply(modified.get(), p, i, cn)) return;
+        modified.saveAs(buildPath(output_dir, baseName, suffix, p, cn).c_str());
+    };
+
+#pragma omp parallel for schedule(dynamic) num_threads(num_threads) \
+default(none) \
+shared(baseImage, baseName, entries, colorNuances, apply, buildPath, process_one) \
+firstprivate(num_props, proportions)
+    for (size_t p_idx = 0; p_idx < num_props; ++p_idx) {
+        const float p = proportions.start + p_idx * proportions.step;
+
+        for (size_t i = 0; i < entries.size(); ++i) {
+            if (colorNuances) {
+                for (int cn = (*colorNuances)[0];
+                     cn <= (*colorNuances)[1];
+                     cn += (*colorNuances)[2])
+                    process_one(p, i, cn);
+            } else {
+                process_one(p, i, 0);
+            }
+        }
+    }
+}
+
 void processImageTransforms(
     const std::string& baseName ,
     const std::string& inputPath,
-    const std::vector<float> &proportions,
+    const PropRange& proportions,
     const std::vector<int>& colorNuances,
-    int fraction,
     const std::vector<int>& rectangles,
     const std::vector<int>&  tolerance,
-    const std::vector<float>& weightOfRGB,
-    bool severalColorsByProportion,
-    bool totalReversal,
-    bool partial,
-    bool partialInDiagonal,
-    bool oneColor,
-    bool average
+    const std::vector<float>& weightOfRGB
 );
 
 #endif
