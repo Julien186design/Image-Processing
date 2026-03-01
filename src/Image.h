@@ -98,7 +98,7 @@ struct Image {
 	static ImageType get_file_type(const char* filename);
 
 	Image& std_convolve_clamp_to_0(int channel, int ker_w, int ker_h, const double *ker, int cr, int c);
-	Image& std_convolve_clamp_to_border(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc);
+	Image& std_convolve_clamp_to_border(uint8_t channel, uint32_t ker_w, uint32_t ker_h, const double ker[], uint32_t cr, uint32_t cc);
 	Image& std_convolve_cyclic(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc);
 
 
@@ -140,7 +140,7 @@ struct Image {
 
 	Image& grayscale_avg();
 
-	std::optional<int> sorting_pixels_by_brightness(float proportion, bool below) const;
+	[[nodiscard]] std::optional<int> sorting_pixels_by_brightness(float proportion, bool below) const;
 	Image& proportion_complete(float proportion, int colorNuance, bool useDarkNuance, bool below);
 	Image& reverse_by_proportion(float proportion, bool below);
 
@@ -232,7 +232,6 @@ public:
           gx(imgSize),
           gy(imgSize),
           g(imgSize),
-          theta(imgSize),
           outputRGB(imgSize * 3),
           tempImg(w, h, 1)
     {}
@@ -248,14 +247,16 @@ public:
         // -------------------------
         // Stage 1: Normalize to double
         // -------------------------
-        #pragma omp parallel for schedule(static)
+        #pragma omp parallel for schedule(static) default(none) \
+    		shared(blurData)
         for (size_t k = 0; k < imgSize; ++k)
             blurData[k] = tempImg.data[k] / 255.0;
 
         // -------------------------
         // Stage 2: Horizontal derivative pass
         // -------------------------
-        #pragma omp parallel for collapse(2) schedule(static)
+		#pragma omp parallel for collapse(2) schedule(static) default(none) \
+			shared(blurData, tx, ty)
         for (int r = 0; r < height; ++r)
         {
             for (int c = 1; c < width - 1; ++c)
@@ -273,12 +274,13 @@ public:
         // -------------------------
         // Stage 3: Vertical derivative pass
         // -------------------------
-        #pragma omp parallel for collapse(2) schedule(static)
+		#pragma omp parallel for collapse(2) schedule(static) default(none) \
+			shared(tx, ty, gx, gy)
         for (int c = 1; c < width - 1; ++c)
         {
             for (int r = 1; r < height - 1; ++r)
             {
-                size_t idx = static_cast<size_t>(r) * width + c;
+                const size_t idx = static_cast<size_t>(r) * width + c;
 
                 gx[idx] = 47.0 * tx[(r + 1) * width + c]
                         + 162.0 * tx[r * width + c]
@@ -292,11 +294,11 @@ public:
         // -------------------------
         // Stage 4: Gradient magnitude and orientation
         // -------------------------
-        #pragma omp parallel for schedule(static)
+		#pragma omp parallel for schedule(static) default(none) \
+			shared(g, gx, gy)
         for (size_t k = 0; k < imgSize; ++k)
         {
             g[k] = std::sqrt(gx[k] * gx[k] + gy[k] * gy[k]);
-            theta[k] = std::atan2(gy[k], gx[k]);
         }
 
         // -------------------------
@@ -305,7 +307,7 @@ public:
         double mx = -std::numeric_limits<double>::infinity();
         double mn =  std::numeric_limits<double>::infinity();
 
-        #pragma omp parallel
+		#pragma omp parallel default(none) shared(g, mx, mn)
         {
             double local_max = -std::numeric_limits<double>::infinity();
             double local_min =  std::numeric_limits<double>::infinity();
@@ -327,10 +329,11 @@ public:
         // -------------------------
         // Stage 6: HSL → RGB mapping
         // -------------------------
-        #pragma omp parallel for schedule(static)
+		#pragma omp parallel for schedule(static) default(none) \
+			shared(g, outputRGB) firstprivate(mx, mn)
         for (size_t k = 0; k < imgSize; ++k)
         {
-            const double h = theta[k] * 180.0 / M_PI + 180.0;
+        	const double h = std::atan2(gy[k], gx[k]) * 180.0 / M_PI + 180.0;
             double v = (mx == mn) ? 0.0 : (g[k] - mn) / (mx - mn);
             v = (v > threshold) ? v : 0.0;
 
