@@ -1,225 +1,125 @@
-#include "Image.h"
 #include "ImageProcessing.h"
-#include "ProcessingConfig.h"
-#include <vector>
-#include <string>
-#include <cstring>
-#include <immintrin.h>
-#include <format>
-#include <execution>
 
-void oneColorTransformations(
-    const Image& baseImage,
-    const std::string& baseName,
-    const std::vector<int>& tolerance,
-    const std::vector<float>& weightOfRGB,
-    const bool average
+EdgeDetectorResult process_edge_detection_core(
+    const uint8_t* grayData,
+    const int width,
+    const int height,
+    const double threshold
 ) {
+	const size_t imgSize = width * height;
 
-    const OneColorPipeline pipeline(weightOfRGB, average, true, true);
+	// Determine the number of threads to use
+	const int max_threads = omp_get_max_threads();
+	const int threads_to_use = std::max(1, max_threads - THREAD_OFFSET);
+	omp_set_num_threads(threads_to_use);
 
-    const int num_tole        = (tolerance[1] - tolerance[0]) / tolerance[2] + 1;
-    const size_t total_iterations = pipeline.configCount() * num_tole;
+	// Pre-computed Gaussian kernel
+	constexpr double inv16 = 1.0 / 16.0;
+	constexpr double gauss[9] = {
+		inv16, 2 * inv16, inv16,
+		2 * inv16, 4 * inv16, 2 * inv16,
+		inv16, 2 * inv16, inv16
+	};
 
-    #pragma omp parallel default(none) \
-    shared(baseImage, pipeline, tolerance, baseName, num_tole, total_iterations)
-    {
-        ImageBuffer buffer(baseImage.w, baseImage.h, baseImage.channels);
-        std::string path;
-        path.reserve(256);
+	std::vector blurData(imgSize, 0.0);
+	std::vector<double> tx(imgSize), ty(imgSize);
+	std::vector<double> gx(imgSize), gy(imgSize);
+	std::vector<double> g(imgSize), theta(imgSize);
 
-    #pragma omp for schedule(dynamic)
-        for (size_t iter = 0; iter < total_iterations; ++iter) {
-            const size_t config_idx = iter / num_tole;
-            const int    tole       = tolerance[0] + (iter % num_tole) * tolerance[2];
-
-            const auto p = pipeline.buildParams(config_idx);
-
-            buffer.resetFrom(baseImage);
-            if (pipeline.average) {
-                OneColorPipeline::applyWithAverage(buffer.get(), tole, pipeline.configs[config_idx]);
-            } else {
-                OneColorPipeline::applyWithoutAverage(buffer.get(), tole, p);
-            }
-            path = OutputPathBuilder::image_one_color(pipeline.average, baseName, p.weightedColors, tole);
-            buffer.saveAs(path.c_str());
-        }
-    }
-}
-
-
-void complete_transformations_by_proportion(
-    const Image& baseImage,
-    const std::string& baseName,
-    const PropRange& proportions,
-    const std::vector<int>& colorNuances
-) {
-    // Build entries from the global step-by-step table
-    const std::vector entries(
-        total_step_by_step_entries.begin(),
-        total_step_by_step_entries.end()
-    );
-
-    // apply: delegate to proportion_complete using per-transform params
-    auto apply = [](Image& img, const float p, const size_t transformIdx, const int cn) -> bool {
-        if (p <= 0.0f || p >= 1.0f) return false;
-        const auto [below, dark] = transformation_params[transformIdx];
-        img.proportion_complete(p, cn, dark, below);
-        return true;
-    };
-
-    // buildPath: forward to the OutputPathBuilder, ignore cn=0 sentinel when no nuance
-    auto buildPath = [](const std::string& dir, const std::string& base,
-                        const std::string& suffix, const float p, const int cn) {
-        return OutputPathBuilder::complete(dir, base, suffix, p, cn);
-    };
-
-    run_transformations_by_proportion(
-        baseImage, baseName, proportions, entries,
-        apply, buildPath,
-        &colorNuances  // pass nuances → activates inner color loop
-    );
-}
-
-void partial_transformations_by_proportion(
-    const Image& baseImage,
-    const std::string& baseName,
-    const PropRange& proportions,
-    const std::vector<int>& first_and_last_rectangles,
-    const std::vector<int>& colorNuances,
-    const int fraction
-) {
-    const std::vector<TransformationEntry> partialEntries =
-        generatePartialEntries(total_step_by_step_entries);
-
-    const auto [diagonal, rectangles] = decode_rectangles(first_and_last_rectangles);
-
-    // Capture rectangles, fraction, diagonal by value — safe across threads
-    auto apply = [rectangles, fraction](Image& img, const float p, const size_t transformIdx, const int cn) -> bool {
-        if (p <= 0.0f) return false;
-        const auto [below, dark] = transformation_params[transformIdx];
-        img.proportion_region_fraction(p, cn, fraction, rectangles, dark, below);
-        return true;
-    };
-
-    auto buildPath = [diagonal, rectangles](const std::string& dir, const std::string& base,
-                                             const std::string& suffix, const float p, const int cn) {
-        return OutputPathBuilder::partial(dir, base, suffix, p, cn, diagonal, rectangles);
-    };
-
-    run_transformations_by_proportion(
-        baseImage, baseName, proportions, partialEntries,
-        apply, buildPath,
-        &colorNuances
-    );
-}
-
-void reverse_transformations_by_proportion(
-    const Image& baseImage,
-    const std::string& baseName,
-    const PropRange& proportions
-) {
-    const std::vector entries(
-        reversal_step_by_step_entries.begin(),
-        reversal_step_by_step_entries.end()
-    );
-
-    // Skip duplicate p=0.5: the reversal is symmetric, processing it twice is wasteful
-    auto applyWithSkip = [](Image& img, const float p, const size_t i, const int cn) -> bool {
-        if (p <= 0.0f) return false;
-        const bool below = (i == 0);
-        img.reverse_by_proportion(p, below);
-        return true;
-    };
-
-    auto buildPath = [](const std::string& dir, const std::string& base,
-                        const std::string& suffix, const float p, int /*cn*/) {
-        return OutputPathBuilder::reverse(dir, base, suffix, p);
-    };
-
-
-    run_transformations_by_proportion(
-        baseImage, baseName, proportions, entries,
-        applyWithSkip, buildPath
-        // no colorNuances → nullptr by default
-    );
-
-    // Handle p=0.5 separately if it falls outside the proportion range
-    const size_t num_props =
-        static_cast<size_t>((proportions.stop - proportions.start) / proportions.step) + 1;
-
-    if (const float last_p = proportions.start + (num_props - 1) * proportions.step; last_p < 0.5f || proportions.start > 0.5f) {
-        reverse_at_proportion(baseImage, baseName, 0.5f);
-    }
-}
-
-void edge_detector_image(
-	const Image& baseImage,
-	const std::string& baseName
-) {
-	Image img = baseImage;
-	img.grayscale_avg();
-    const int img_size = img.w*img.h;
-
-    std::vector<uint8_t> grayData(img.w * img.h);
-
-    for (uint64_t k = 0; k < img_size; ++k) {
-        grayData[k] = img.data[k * img.channels];  // Extrait le canal de gris
-    }
-
-	EdgeDetectorPipeline pipeline(img.w, img.h, 0.09);
-	const std::vector<uint8_t>& rgb = pipeline.process(grayData.data());
-
-	Image GT(img.w, img.h, 3);
-	std::memcpy(GT.data, rgb.data(), rgb.size());
-
-	const std::string outputPath = OutputPathBuilder::image_edge_detector(baseName);
-	GT.write(outputPath.c_str());
-}
-
-
-void processImageTransforms(
-    const std::string& baseName,
-    const std::string& inputPath,
-    const PropRange& proportions,
-    const std::vector<int>& colorNuances,
-    const std::vector<int>& rectangles,
-    const std::vector<int>& tolerance,
-    const std::vector<float>& weightOfRGB
-) {
-
-    if (is_mp4_file(inputPath)) {
-        std::cout << "MP4 file detected, no transformation applied." << std::endl;
-        return;
-    }
-
-	std::cout << inputPath << std::endl;
-
-    const Image image(inputPath.c_str());
-
-	edge_detector_image(image, baseName);
-
-    if (parameters::oneColor) {
-        oneColorTransformations(image, baseName, tolerance, weightOfRGB, parameters::average);
-    }
-
-	if (parameters::complete_transformation_colors_by_proportion) {
-		complete_transformations_by_proportion(image, baseName, proportions, colorNuances);
+	// === Gaussian blur ===
+#pragma omp parallel for default(none) shared(blurData, grayData, width, height, gauss)
+	for (int r = 1; r < height - 1; ++r) {
+		for (int c = 1; c < width - 1; ++c) {
+			double sum = 0.0;
+			for (int kr = -1; kr <= 1; ++kr) {
+				for (int kc = -1; kc <= 1; ++kc) {
+					sum += grayData[(r + kr) * width + (c + kc)] *
+							gauss[(kr + 1) * 3 + (kc + 1)];
+				}
+			}
+			blurData[r * width + c] = sum;
+		}
 	}
 
-    if (parameters::totalReversal) {
-        reverse_transformations_by_proportion(image, baseName, proportions);
-    }
+	// === Scharr separable convolution ===
+#pragma omp parallel for default(none) shared(tx, ty, blurData, width, height)
+	for (int r = 0; r < height; ++r) {
+		for (int c = 1; c < width - 1; ++c) {
+			const size_t idx = r * width + c;
+			tx[idx] = blurData[idx + 1] - blurData[idx - 1];
+			ty[idx] = 47 * blurData[idx + 1] + 162 * blurData[idx] + 47 * blurData[idx - 1];
+		}
+	}
 
-    if (parameters::partial) {
-        partial_transformations_by_proportion(
-            image, baseName, proportions, rectangles, colorNuances, parameters::fraction);
-    }
+#pragma omp parallel for default(none) shared(gx, gy, tx, ty, width, height)
+	for (int c = 1; c < width - 1; ++c) {
+		for (int r = 1; r < height - 1; ++r) {
+			const size_t idx = r * width + c;
+			gx[idx] = 47 * tx[idx + width] + 162 * tx[idx] + 47 * tx[idx - width];
+			gy[idx] = ty[idx + width] - ty[idx - width];
+		}
+	}
 
-    if (parameters::partialInDiagonal) {
-        const std::vector<int> rectanglesInDiagonal = genererRectanglesInDiagonal(parameters::fraction);
-        partial_transformations_by_proportion(
-            image, baseName, proportions, rectanglesInDiagonal, colorNuances, parameters::fraction);
-    }
+	// === Magnitude/angle computation + min/max reduction ===
+	double mx = -INFINITY, mn = INFINITY;
+#pragma omp parallel default(none) shared(g, gx, gy, theta, mx, mn, imgSize)
+	{
+		double local_mx = -INFINITY, local_mn = INFINITY;
 
+#pragma omp for nowait
+		for (int k = 0; k < imgSize; ++k) {
+			g[k] = std::sqrt(gx[k] * gx[k] + gy[k] * gy[k]);
+			theta[k] = std::atan2(gy[k], gx[k]);
+			local_mx = std::max(local_mx, g[k]);
+			local_mn = std::min(local_mn, g[k]);
+		}
+
+#pragma omp critical
+		{
+			mx = std::max(mx, local_mx);
+			mn = std::min(mn, local_mn);
+		}
+	}
+
+	// === HSL to RGB conversion ===
+	std::vector<uint8_t> outputRGB(imgSize * 3);
+	const double range = (mx == mn) ? 1.0 : (mx - mn);
+
+#pragma omp parallel for default(none) shared(outputRGB, g, theta, mn, range, threshold, imgSize)
+	for (int k = 0; k < imgSize; ++k) {
+		const double h = theta[k] * 180.0 / M_PI + 180.0;
+		const double v = ((g[k] - mn) / range > threshold) ? (g[k] - mn) / range : 0.0;
+		const double s = v, l = v;
+
+		const double c = (1 - std::abs(2 * l - 1)) * s;
+		const double x = c * (1 - std::abs(std::fmod(h / 60.0, 2) - 1));
+		const double m = l - c / 2.0;
+
+		double rt = 0, gt = 0, bt = 0;
+		if (h < 60) {
+			rt = c;
+			gt = x;
+		} else if (h < 120) {
+			rt = x;
+			gt = c;
+		} else if (h < 180) {
+			gt = c;
+			bt = x;
+		} else if (h < 240) {
+			gt = x;
+			bt = c;
+		} else if (h < 300) {
+			bt = c;
+			rt = x;
+		} else {
+			bt = x;
+			rt = c;
+		}
+
+		outputRGB[k * 3] = static_cast<uint8_t>(255 * (rt + m));
+		outputRGB[k * 3 + 1] = static_cast<uint8_t>(255 * (gt + m));
+		outputRGB[k * 3 + 2] = static_cast<uint8_t>(255 * (bt + m));
+	}
+
+	return {std::move(outputRGB), mn, mx};
 }
