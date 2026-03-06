@@ -16,6 +16,9 @@ find . -type f -delete
 Deleting files whose name contains "Tolerance 1".
 rm *"Tolerance 1"*
 
+Extracting the 10th frame from a video.
+ffmpeg -i input.mp4 -vf select='eq(n\,9)' -vframes 1 output.jpg
+
 Getting the number of frames in the file "video"
 ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=nb_read_frames -of csv=p=0 video.mp4
 
