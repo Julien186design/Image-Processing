@@ -1,6 +1,6 @@
 #include "ProcessingConfig.h"
-#include "ImageProcessing.h"
-#include "VideoProcessing.h"
+#include "ImageCreation.h"
+#include "VideoCreation.h"
 
 #include <chrono>
 
@@ -10,13 +10,9 @@ void image_and_video_processing(const std::string& inputFile) {
 
     const auto [baseName, inputPath] = extractImageInfo(inputFile);
 
-    const parameters cfg;
+    processImageTransforms(baseName, inputPath);
 
-    processImageTransforms(baseName, inputPath, cfg.proportions, cfg.colorNuances,
-        cfg.rectangles, cfg.toleranceOneColor, cfg.weightOfRGB);
-
-    processVideoTransforms(baseName, inputPath, cfg.proportions, cfg.colorNuances,
-                           cfg.frames, cfg.toleranceOneColor, cfg.weightOfRGB);
+    processVideoTransforms(baseName, inputPath);
 
     const auto end = std::chrono::high_resolution_clock::now();
     const auto duration = std::chrono::duration_cast<std::chrono::seconds>(end - start);
