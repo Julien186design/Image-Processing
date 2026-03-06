@@ -23,15 +23,17 @@ endif()
 add_executable(video_transform
         Image.cpp
         Image.h
-        ImageProcessing.cpp
         ImageProcessing.h
         main.cpp
         schrift.h
-        TransformationsConfig.h
-        VideoProcessing.cpp
         VideoProcessing.h
         ProcessingConfig.h
         ProcessingConfig.cpp
+        ImageCreation.cpp
+        ImageCreation.h
+        VideoCreation.cpp
+        VideoCreation.h
+        ImageProcessing.cpp
 )
 
 # Lien avec OpenCV et OpenMP
