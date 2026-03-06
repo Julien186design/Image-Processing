@@ -5,8 +5,6 @@
 
 #define THREAD_OFFSET 1
 
-#include  "Image.h"
-
 #include <string>
 #include <utility>
 #include <vector>
@@ -15,69 +13,85 @@
 #include <chrono>
 #include <algorithm>
 #include <omp.h>
-
-
-struct PropRange {
-    float start;
-    float stop;
-    float step;
-
-    struct iterator {
-        float current;
-        float step;
-
-        float operator*() const noexcept {
-            return current;
-        }
-
-        iterator& operator++() noexcept {
-            current += step;
-            return *this;
-        }
-    };
-
-    struct sentinel {
-        float stop;
-    };
-
-    [[nodiscard]]
-    iterator begin() const noexcept {
-        return { start, step };
-    }
-
-    [[nodiscard]]
-    sentinel end() const noexcept {
-        return { stop };
-    }
-};
-
-inline bool operator!=(const PropRange::iterator& it,
-                       const PropRange::sentinel& s) noexcept {
-    return it.current <= s.stop + 1e-6f;
-}
+#include <array>
+#include <iostream>
 
 struct parameters {
-    const PropRange proportions {0.f, 1.f, 0.125f}; // {first proportion, last proportion, step}
-    const std::vector<int> colorNuances = {0, 0, 20}; // {first color, last color, step}
-    const std::vector<int> frames = {0, 100};
-    static constexpr int fps = 60;
+    static constexpr std::array<float, 3> proportions = {0.f, 1.f, 1.f};
+    static constexpr std::array<int, 3> colorNuances = {0, 60, 5}; // {first color, last color, step}
+    static constexpr std::array<int, 2> frames = {0, 0};
+    static constexpr int fps = 30;
     static constexpr int fraction = 2;
-    std::vector<int> rectangles = {8, 12};
-    const std::vector<int> toleranceOneColor = {1, 2, 1};
-    const std::vector<float> weightOfRGB = {0, 1, 0.1};
+    static constexpr std::array<int, 2> rectangles = {4, 12};
+    static constexpr std::array<int, 3> toleranceOneColor = {0, 40, 1};
+    static constexpr std::array<float, 3> weightOfRGB = {0.f, 1.f, .25f};
     static constexpr bool complete_transformation_colors_by_proportion = false;
     static constexpr bool oneColor = true;
     static constexpr bool average = false;
-    static constexpr bool totalReversal = true;
+    static constexpr bool totalReversal = false;
     static constexpr bool partial = false;
     static constexpr bool partialInDiagonal = false;
 };
+
+struct ThresholdParams {
+    bool below;
+    bool dark;
+};
+
+// ─── Transformation entry: groups a suffix with its output directory ──────────
+
+struct TransformationEntry {
+    std::string suffix;
+    std::string output_dir;
+
+    // Returns the "partial/square" variant of this entry
+    [[nodiscard]] TransformationEntry partial() const {
+        std::string dir = output_dir;
+        if (!dir.empty() && dir.back() == '/')
+            dir.pop_back();
+        return { suffix + " Partial", dir + " Square/" };
+    }
+};
+
+// ─── Threshold parameter sets ─────────────────────────────────────────────────
+
+constexpr std::array<ThresholdParams, 4> transformation_params = {{
+    {true,  true },  // BelowDark
+    {true,  false},  // BelowLight
+    {false, true },  // AboveDark
+    {false, false}   // AboveLight
+}};
+
+
 
 constexpr const char* output_folder = "Output/";
 const std::string folder_120        = std::string(output_folder) + "120/";
 const std::string folder_videos     = std::string(output_folder) + "Videos/";
 const std::string folder_edgedetector = std::string(output_folder) + "Edge Detector/";
 const std::string folder_onecolor = std::string(output_folder) + "One Color/";
+
+// ─── Step-by-step transformations (BTB, BTW, WTB, WTW) ───────────────────────
+
+const std::vector<TransformationEntry> total_step_by_step_entries = {
+    { "BTB", std::string(output_folder) + "BTB/" },
+    { "BTW", std::string(output_folder) + "BTW/" },
+    { "WTB", std::string(output_folder) + "WTB/" },
+    { "WTW", std::string(output_folder) + "WTW/" },
+};
+
+// ─── Reversal transformations ─────────────────────────────────────────────────
+
+const std::vector<TransformationEntry> reversal_step_by_step_entries = {
+    { "Reversal-BT", std::string(output_folder) + "Reversal-BT/" },
+    { "Reversal-WT", std::string(output_folder) + "Reversal-WT/" },
+};
+
+// ─── Black-and-white transformations ─────────────────────────────────────────
+
+const std::vector<TransformationEntry> total_black_and_white_entries = {
+    { "Black and white - Original", std::string(output_folder) + "Original black and white/" },
+    { "Black and white - Reversed", std::string(output_folder) + "Reversed black and white/" },
+};
 
 void image_and_video_processing(const std::string& inputFile);
 
@@ -89,10 +103,10 @@ inline void sendNotification(const std::string& title, const std::string &messag
     (void)std::system(command.c_str());
 }
 
-inline std::vector<int> genererRectanglesInDiagonal(const int fraction) {
-    if (fraction <= 0) return {};
-    const int taille = 1 << fraction;  // 2^fraction via bit-shift
-    const int pas = taille + 1;
+inline std::vector<int> genererRectanglesInDiagonal() {
+    if constexpr (parameters::fraction <= 0) return {};
+    constexpr int taille = 1 << parameters::fraction;  // 2^fraction via bit-shift
+    constexpr int pas = taille + 1;
 
     std::vector<int> vector;
     vector.reserve(taille);
@@ -104,18 +118,18 @@ inline std::vector<int> genererRectanglesInDiagonal(const int fraction) {
     return vector;
 }
 
-inline std::pair<bool, std::vector<int>> decode_rectangles(const std::vector<int>& input) {
-    if (input.empty()) return {false, {}};
+inline std::pair<bool, std::vector<int>> decode_rectangles() {
+    if constexpr (parameters::rectangles.empty()) return {false, {}};
 
-    if (input[0] == -1) {
+    if constexpr (parameters::rectangles[0] == -1) {
         // Diagonal case: rectangles are explicitly listed after the flag
-        return {true, std::vector<int>(input.begin() + 1, input.end())};
+        return {true, std::vector<int>(parameters::rectangles.begin() + 1, parameters::rectangles.end())};
     }
 
     // Non-diagonal case: input is {start, end}, expand to range
-    if (input.size() != 2) return {false, {}};
-    const int start = std::min(input[0], input[1]);
-    const int end   = std::max(input[0], input[1]);
+    if constexpr (parameters::rectangles.size() != 2) return {false, {}};
+    constexpr int start = std::min(parameters::rectangles[0], parameters::rectangles[1]);
+    constexpr int end   = std::max(parameters::rectangles[0], parameters::rectangles[1]);
 
     std::vector<int> result;
     result.reserve(end - start + 1);
@@ -142,171 +156,147 @@ inline int computeNumThreads() {
     return std::max(1, omp_get_max_threads() - THREAD_OFFSET);
 }
 
+
+// ─── Helpers to extract suffixes / dirs from an entry list ───────────────────
+
+inline std::vector<std::string> getSuffixes(const std::vector<TransformationEntry>& entries) {
+    std::vector<std::string> result;
+    result.reserve(entries.size());
+    std::ranges::transform(entries, std::back_inserter(result),
+        [](const TransformationEntry& e) { return e.suffix; });
+    return result;
+}
+
+inline std::vector<std::string> getOutputDirs(const std::vector<TransformationEntry>& entries) {
+    std::vector<std::string> result;
+    result.reserve(entries.size());
+    std::ranges::transform(entries, std::back_inserter(result),
+        [](const TransformationEntry& e) { return e.output_dir; });
+    return result;
+}
+
+// ─── Partial variant generation ───────────────────────────────────────────────
+
+inline std::vector<TransformationEntry> generatePartialEntries(
+    const std::vector<TransformationEntry>& entries)
+{
+    std::vector<TransformationEntry> result;
+    result.reserve(entries.size());
+    std::ranges::transform(entries, std::back_inserter(result),
+        [](const TransformationEntry& e) { return e.partial(); });
+    return result;
+}
+
 class OutputPathBuilder {
 public:
     // Formats a float with up to 2 decimal places, no trailing zeros
-    static std::string formatProportion(float value) {
-        std::string s = std::format("{:.4f}", value);
-        s.erase(s.find_last_not_of('0') + 1);
-        if (s.back() == '.') s.pop_back();
-        return s;
+    static std::string formatProportion(const float value) {
+        char buf[16];
+        int len = std::snprintf(buf, sizeof(buf), "%.2f", value);
+        while (len > 0 && buf[len - 1] == '0') --len;
+        if (len > 0 && buf[len - 1] == '.') --len;
+        return {buf, static_cast<size_t>(len)};
     }
 
-    // Writes the standard prefix directly into an existing stream (avoids intermediate string)
-    static void writeStandard(
-        std::ostringstream& oss,
-        const std::string& outputDir,
-        const std::string& baseName,
-        const std::string& suffix,
-        const float proportion
-    ) {
-        oss << outputDir << baseName << " - " << suffix
-            << ' ' << formatProportion(100.f * proportion) << " % ";
+    // Builds a standard path prefix
+    static std::string buildStandard(const std::string& outputDir,
+                                     const std::string& baseName,
+                                     const std::string& suffix,
+                                     const float proportion) {
+        return std::format("{}{} - {} {} % ", outputDir, baseName, suffix, formatProportion(100.f * proportion));
     }
 
-    static std::string image_edge_detector(
-        const std::string& baseName
-    ) {
-        std::ostringstream oss;
-        oss << folder_edgedetector << baseName << "GT.png";
-        return oss.str();
+    // Simple image paths
+    static std::string image_edge_detector(const std::string& baseName) {
+        return std::format("{}{} - GT.png", folder_edgedetector, baseName);
     }
 
-    static std::string image_one_color(
-        const bool average,
-        const std::string& baseName,
-        const std::string& colors,
-        const int tolerance
-    ) {
-        std::ostringstream oss;
-        oss << folder_onecolor << baseName << " - Average ";
-        if (average)
-            oss << "1";
-        else
-            oss << "0";
-        oss << " - Tolerance " << std::to_string(tolerance) << colors << ".png";
-        return oss.str();
+    static std::string image_one_color(const std::string& baseName, const std::string& colors, int tolerance) {
+        return std::format("{}{} - Average {} - Tolerance {}{}.png",
+                           folder_onecolor,
+                           baseName,
+                           parameters::average ? 1 : 0,
+                           tolerance,
+                           colors);
     }
 
-    static std::string complete(
-        const std::string& outputDir,
-        const std::string& baseName,
-        const std::string& suffix,
-        const float proportion,
-        const int colorNuance
-    ) {
-        std::ostringstream oss;
-        writeStandard(oss, outputDir, baseName, suffix, proportion);
-        oss << "- CN " << colorNuance << ".png";
-        return oss.str();
+    // Complete / reverse / partial paths
+    static std::string complete(const std::string& outputDir,
+                                const std::string& baseName,
+                                const std::string& suffix,
+                                const float proportion,
+                                int colorNuance) {
+        return buildStandard(outputDir, baseName, suffix, proportion) + std::format("- CN {}.png", colorNuance);
     }
 
-    static std::string reverse(
-        const std::string& outputDir,
-        const std::string& baseName,
-        const std::string& suffix,
-        const float proportion
-    ) {
-        std::ostringstream oss;
-        writeStandard(oss, outputDir, baseName, suffix, proportion);
-        oss << ".png";
-        return oss.str();
+    static std::string reverse(const std::string& outputDir,
+                               const std::string& baseName,
+                               const std::string& suffix,
+                               const float proportion) {
+        return buildStandard(outputDir, baseName, suffix, proportion) + ".png";
     }
 
-    static std::string partial(
-        const std::string& outputDir,
-        const std::string& baseName,
-        const std::string& suffix,
-        const float proportion,
-        const int colorNuance,
-        const bool diagonal,
-        const std::vector<int>& rectangles
-    ) {
-        std::ostringstream oss;
-        writeStandard(oss, outputDir, baseName, suffix, proportion);
-        if (diagonal)
-            oss << "- " << rectangles.size() << " Squares";
-        else
-            oss << "- Rectangles " << rectangles.front() << " - " << rectangles.back();
-        oss << " - CN " << colorNuance << ".png";
-        return oss.str();
+    static std::string partial(const std::string& outputDir,
+                               const std::string& baseName,
+                               const std::string& suffix,
+                               const float proportion,
+                               int colorNuance,
+                               const bool diagonal,
+                               const std::vector<int>& rectangles) {
+        const std::string rectInfo = diagonal
+            ? std::format("- {} Squares", rectangles.size() - 1)
+            : std::format("- Rectangles {} - {}", rectangles.front(), rectangles.back());
+        return buildStandard(outputDir, baseName, suffix, proportion) + rectInfo + std::format(
+                   " - CN {}.png", colorNuance);
     }
 
-    static std::string build120(
-        const std::string& folder120,
-        const std::string& baseName,
-        const std::string& transformationType,
-        const std::string& suffix
-    ) {
-        // Simple concatenation — no stream needed
+    // Simple concatenation
+    static std::string build120(const std::string& folder120,
+                                const std::string& baseName,
+                                const std::string& transformationType,
+                                const std::string& suffix) {
         return folder120 + baseName + transformationType + suffix;
     }
 
-    static std::string video_several_colors(
-        const std::string& baseName,
-        const int nFrames,
-        const int fps,
-        const std::vector<int>& colorNuances
-    ) {
-        std::ostringstream oss;
-        oss << folder_videos << baseName
-            << " - " << std::to_string(nFrames) << " images"
-            << " - " << fps     << " fps"
-            << " - {" << std::to_string(colorNuances[0]) << '-' <<
-                std::to_string(colorNuances[1]) << '-' << std::to_string(colorNuances[2]) << '}'
-            << ".mp4";
-        return oss.str();
+    // Video paths
+    static std::string video_several_colors(const std::string& baseName, int nFrames) {
+        return std::format("{}{} - {} images - {} fps - {{{}-{}-{}}}.mp4",
+                           folder_videos, baseName, nFrames, parameters::fps,
+                           parameters::colorNuances[0],
+                           parameters::colorNuances[1],
+                           parameters::colorNuances[2]);
     }
 
-    static std::string video_one_color(
-        const std::string& baseName,
-        const size_t nFrames,
-        const int fps,
-        const std::vector<float>& weightOfRGB,
-        const bool average
-    ) {
-        std::ostringstream oss;
-        oss << folder_videos << baseName
-            << " - One Color - "
-            << nFrames << " images - "
-            << fps     << " fps -"
-            << writingWeightedColors(weightOfRGB, false);
-        if (average) oss << " Average";
-        oss << ".mp4";
-        return oss.str();
+    static std::string video_one_color(const std::string& baseName, size_t nFrames) {
+        std::string path = std::format("{}{} - {} images - {} fps - {}",
+                                       folder_onecolor, baseName, nFrames, parameters::fps,
+                                       writingWeightedColors(parameters::weightOfRGB, false));
+        if (parameters::average) path += " Average";
+        path += ".mp4";
+        return path;
     }
 
-    static std::string video_edge_detector(
-        const std::string& baseName,
-        const int framesToProcess,
-        const int totalFrames,
-        const double fps,
-        const std::vector<int>& frames
-    ) {
-        std::ostringstream oss;
-        oss << folder_edgedetector << baseName
-            << " - Edge Detector - "
-            << std::to_string(framesToProcess) << " frames ";
-        if (framesToProcess == totalFrames)
-            oss << " - ";
-        else
-            oss << '{' << frames[0] << '-' << frames[1] << "} ";
-        oss << formatProportion(static_cast<float>(fps)) << " fps.mp4";
-        return oss.str();
+    static std::string video_edge_detector(const std::string& baseName,
+                                           int framesToProcess,
+                                           const int totalFrames,
+                                           const double fps) {
+        std::string range = (framesToProcess == totalFrames) ? " - " :
+                            std::format("{{{}-{}}} ", parameters::frames[0], parameters::frames[1]);
+        return std::format("{}{} - {} frames {}{} fps.mp4",
+                           folder_edgedetector, baseName, framesToProcess, range, formatProportion(static_cast<float>(fps)));
     }
 
-    // Formats weighted RGB values as " {r-g-b}"
-    static std::string writingWeightedColors(const std::vector<float>& weightOfRGB, const bool integerMode) {
-        std::string s;
-        s.reserve(32);
-        s += " {";
+    static std::string video_edge_detector_temp(const std::string& baseName) {
+        return std::format("{}{}_temp.mp4", folder_edgedetector, baseName);
+    }
+
+    // Weighted RGB as "{r-g-b}"
+    static std::string writingWeightedColors(const std::span<const float> weightOfRGB, const bool integerMode) {
+        std::string s = " {";
         for (size_t i = 0; i < 3; ++i) {
             if (i > 0) s += '-';
-            const float val = weightOfRGB[i];
-            if (integerMode)
-                s += std::to_string(static_cast<int>(val));
-            else
-                s += formatProportion(val);
+            s += integerMode ? std::to_string(static_cast<int>(weightOfRGB[i]))
+                             : formatProportion(weightOfRGB[i]);
         }
         s += '}';
         return s;
@@ -375,6 +365,27 @@ private:
     std::atomic<bool> threeQuarterSent_;
 
     std::chrono::steady_clock::time_point start_;
+};
+
+class Logger {
+public:
+    // Variadic template: handles any number/type of arguments
+    template<typename... Args>
+    static void log(Args&&... args) {
+        (std::cout << ... << std::forward<Args>(args)) << std::endl;
+    }
+
+    // Overload with '\r' + flush for progress lines (like frame counter)
+    template<typename... Args>
+    static void logProgress(Args&&... args) {
+        (std::cout << ... << std::forward<Args>(args)) << "\r";
+        std::cout.flush();
+    }
+
+    template<typename... Args>
+    static void err(Args&&... args) {
+        (std::cerr << ... << std::forward<Args>(args)) << std::endl;
+    }
 };
 
 #endif //IMAGE_PROCESSING_PROCESSINGCONFIG_H
