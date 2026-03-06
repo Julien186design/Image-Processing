@@ -18,6 +18,7 @@ inline void several_colors_transformations_streaming(
     const std::string& baseName,
     const std::string& inputPath
 ) {
+    if constexpr (!parameters::complete_transformation_colors_by_proportion) {return;}
     // Load the input image using OpenCV
     auto imageOpt = loadImage(inputPath);
     if (!imageOpt) return;
