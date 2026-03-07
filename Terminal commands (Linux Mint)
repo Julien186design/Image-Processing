@@ -19,6 +19,12 @@ rm *"Tolerance 1"*
 Extracting the 10th frame from a video.
 ffmpeg -i input.mp4 -vf select='eq(n\,9)' -vframes 1 output.jpg
 
+Extracting the pictures 1400 to 1500.
+ffmpeg -i input.mp4 -vf select='gte(n\,1400)*lte(n\,1500)' -vsync 0 output_%02d.jpg
+
+Extracting all images from a video.
+ffmpeg -i input.mp4 output_%04d.jpg
+
 Getting the number of frames in the file "video"
 ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=nb_read_frames -of csv=p=0 video.mp4
 
