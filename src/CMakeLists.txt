@@ -39,7 +39,7 @@ add_executable(video_transform
 # Lien avec OpenCV et OpenMP
 target_link_libraries(video_transform PRIVATE ${OpenCV_LIBS} OpenMP::OpenMP_CXX)
 
-# Détection de support AVX2 et optimisations pour ton processeur (Intel i5-7260U)
+
 include(CheckCXXCompilerFlag)
 CHECK_CXX_COMPILER_FLAG("-mavx2" COMPILER_SUPPORTS_AVX2)
 CHECK_CXX_COMPILER_FLAG("-fopenmp" COMPILER_SUPPORTS_OPENMP)
