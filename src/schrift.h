@@ -21,13 +21,7 @@
 extern "C" {
 #endif
 
-#include <assert.h>
-#include <errno.h>
-#include <math.h>
 #include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 #if defined(_MSC_VER)
 # define restrict __restrict
@@ -100,4 +94,3 @@ int sft_char(const struct SFT *sft, unsigned long charCode, struct SFT_Char *chr
 #endif
 
 #endif
-
