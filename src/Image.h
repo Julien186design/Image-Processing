@@ -10,10 +10,9 @@
 #include <cmath>
 #include <optional>
 
-
 //legacy feature of C
 #undef __STRICT_ANSI__
-#define _USE_MATH_DEFINES
+#define USE_MATH_DEFINES
 #ifndef M_PI
 	#define M_PI (3.14159265358979323846)
 #endif
@@ -85,7 +84,7 @@ struct Image {
 		return {2, 1, 0}; // Cas par défaut
 	}
 
-	Image(const char* filename, int channel_force = 0);
+	explicit Image(const char* filename, int channel_force = 0);
 	Image(int w, int h, int channels = 3);
 	Image(const Image& img);
 	Image& operator=(const Image& img);
@@ -94,14 +93,13 @@ struct Image {
 
 
 	bool read(const char* filename, int channel_force = 0);
-	bool write(const char* filename);
+	bool write(const char* filename) const;
 
 	static ImageType get_file_type(const char* filename);
 
 	Image& std_convolve_clamp_to_0(int channel, int ker_w, int ker_h, const double *ker, int cr, int c);
 	Image& std_convolve_clamp_to_border(uint8_t channel, uint32_t ker_w, uint32_t ker_h, const double ker[], uint32_t cr, uint32_t cc);
 	Image& std_convolve_cyclic(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc);
-
 
 	static bool approx_equal(const uint8_t a, const  uint8_t b, const uint8_t tol) {
 		const int diff = static_cast<int>(a) - static_cast<int>(b);
@@ -114,6 +112,15 @@ struct Image {
 			 static_cast<unsigned int>(b) + 1u) / 2u
 		);
 	}
+
+	// SimplifyWeights must be declared before any method that uses it
+	struct SimplifyWeights {
+		std::vector<uint8_t> r_third, g_third, b_third;
+		std::vector<uint8_t> r_half,  g_half,  b_half;
+		std::vector<uint8_t> r_full,  g_full,  b_full;
+	};
+
+
 
 	static uint32_t rev(uint32_t n, uint32_t a);
 	static void bit_rev(uint32_t n, std::complex<double> a[], std::complex<double>* A);
@@ -152,13 +159,14 @@ struct Image {
 	uint8_t r_val_third, uint8_t g_val_third, uint8_t b_val_third,
 	uint8_t r_val_half, uint8_t g_val_half, uint8_t b_val_half,
 	uint8_t r_val_full, uint8_t g_val_full, uint8_t b_val_full,
+	uint8_t r_val_zero, uint8_t g_val_zero, uint8_t b_val_zero,
 	int tolerance);
 
-	Image& simplify_to_dominant_color_combinations_with_average(int tolerance, const std::vector<float>& weightOfRGB);
-	Image& simplify_to_dominant_color_combinations_without_average(int tolerance,
-			uint8_t r_third, uint8_t g_third, uint8_t b_third,
-			uint8_t r_half, uint8_t g_half, uint8_t b_half,
-			uint8_t r_full, uint8_t g_full, uint8_t b_full);
+
+	[[nodiscard]] std::vector<Image> simplify_to_dominant_color_combinations(
+		int tolerance,
+		const std::vector<float>* weightOfRGB
+	) const;
 
 
 	template<typename TransformFunc>
