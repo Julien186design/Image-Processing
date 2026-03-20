@@ -52,8 +52,8 @@ bool Image::read(const char* filename, const int channel_force) {
 	return data != nullptr; // used to be NULL
 }
 
-bool Image::write(const char* filename) {
-	ImageType type = get_file_type(filename);
+bool Image::write(const char* filename) const {
+	const ImageType type = get_file_type(filename);
 	int success;
 	switch (type) {
 		case PNG:
@@ -98,6 +98,7 @@ void Image::simplify_pixel(
 	const uint8_t r_val_third, const uint8_t g_val_third, const uint8_t b_val_third,
 	const uint8_t r_val_half, const uint8_t g_val_half, const uint8_t b_val_half,
 	const uint8_t r_val_full, const uint8_t g_val_full, const uint8_t b_val_full,
+	const uint8_t r_val_zero, const uint8_t g_val_zero, const uint8_t b_val_zero,
 	const int tolerance
 ) {
 	const bool r_eq_g = approx_equal(r, g, tolerance);
@@ -116,87 +117,91 @@ void Image::simplify_pixel(
 	if (r_eq_g) {
 		r = r_val_half;
 		g = g_val_half;
-		b = 0;
+		b = b_val_zero;
 		return;
-	} else if (r_eq_b) {
+	}
+	if (r_eq_b) {
 		r = r_val_half;
-		g = 0;
+		g = g_val_zero;
 		b = b_val_half;
 		return;
-	} else if (g_eq_b) {
-		r = 0;
+	}
+	if (g_eq_b) {
+		r = r_val_zero;
 		g = g_val_half;
 		b = b_val_half;
 		return;
 	}
 
 	// Cas 3 : Tous les canaux sont distincts
-	const ChannelIndices indices = get_channel_indices(r, g, b);
+	const auto [max, mid, min] = get_channel_indices(r, g, b);
 	const uint8_t avgs_full[] = {r_val_full, g_val_full, b_val_full};
 	const uint8_t avgs_half[] = {r_val_half, g_val_half, b_val_half};
+	const uint8_t avgs_zero[] = {r_val_zero, g_val_zero, b_val_zero};
 
 	uint8_t new_vals[3] = {0, 0, 0};
-	new_vals[indices.max] = avgs_full[indices.max];
-	new_vals[indices.mid] = avgs_half[indices.mid];
-	new_vals[indices.min] = 0;
+	new_vals[max] = avgs_full[max];
+	new_vals[mid] = avgs_half[mid];
+	new_vals[min] = avgs_zero[min];
 
 	r = new_vals[0];
 	g = new_vals[1];
 	b = new_vals[2];
 }
 
-Image& Image::simplify_to_dominant_color_combinations_with_average(
-	const int tolerance, const std::vector<float>& weightOfRGB) {
-	for (size_t i = 0; i < size; i += channels) {
-		uint8_t& r = data[i];
-		uint8_t& g = data[i + 1];
-		uint8_t& b = data[i + 2];
 
-		const uint8_t r_third = static_cast<uint8_t>(weightOfRGB[0]) * avg_u8_round(r, SimpleColors::ONE_THIRD);
-		const uint8_t g_third = static_cast<uint8_t>(weightOfRGB[1]) * avg_u8_round(g, SimpleColors::ONE_THIRD);
-		const uint8_t b_third = static_cast<uint8_t>(weightOfRGB[2]) * avg_u8_round(b, SimpleColors::ONE_THIRD);
+[[nodiscard]] std::vector<Image> Image::simplify_to_dominant_color_combinations(
+    const int tolerance,
+    const std::vector<float>* weightOfRGB
+) const {
+    constexpr size_t passes = parameters::numProportionSteps;
+    std::vector results(passes, *this);
 
-		const uint8_t r_half = static_cast<uint8_t>(weightOfRGB[0]) * avg_u8_round(r, SimpleColors::HALF);
-		const uint8_t g_half = static_cast<uint8_t>(weightOfRGB[1]) * avg_u8_round(g, SimpleColors::HALF);
-		const uint8_t b_half = static_cast<uint8_t>(weightOfRGB[2]) * avg_u8_round(b, SimpleColors::HALF);
+    for (size_t i = 0; i + 2 < size; i += channels) {
+        for (size_t p = 0; p < passes; ++p) {
+            uint8_t& r = results[p].data[i];
+            uint8_t& g = results[p].data[i + 1];
+            uint8_t& b = results[p].data[i + 2];
 
-		const uint8_t r_full = static_cast<uint8_t>(weightOfRGB[0]) * avg_u8_round(r, SimpleColors::FULL);
-		const uint8_t g_full = static_cast<uint8_t>(weightOfRGB[1]) * avg_u8_round(g, SimpleColors::FULL);
-		const uint8_t b_full = static_cast<uint8_t>(weightOfRGB[2]) * avg_u8_round(b, SimpleColors::FULL);
+            const float t = (passes > 1)
+	                            ? static_cast<float>(p) / static_cast<float>(passes - 1)
+	                            : 1.0f;
 
-		simplify_pixel(
-			r, g, b,
-			r_third, g_third, b_third,
-			r_half, g_half, b_half,
-			r_full, g_full, b_full,
-			tolerance
-		);
-	}
-	return *this;
+        	auto blend = [&](const float orig, const float weight, const float intensity) {
+        		const float source = orig * weight;                    // weighted original
+        		const float target = weight * intensity;
+        		const float interpolated = source + t * (target - source);
+        		return static_cast<uint8_t>(std::clamp(interpolated, 0.0f, 255.0f));
+        	};
+
+            const uint8_t r_third = blend(r, (*weightOfRGB)[0], SimpleColors::ONE_THIRD);
+            const uint8_t g_third = blend(g, (*weightOfRGB)[1], SimpleColors::ONE_THIRD);
+            const uint8_t b_third = blend(b, (*weightOfRGB)[2], SimpleColors::ONE_THIRD);
+
+            const uint8_t r_half = blend(r, (*weightOfRGB)[0], SimpleColors::HALF);
+            const uint8_t g_half = blend(g, (*weightOfRGB)[1], SimpleColors::HALF);
+            const uint8_t b_half = blend(b, (*weightOfRGB)[2], SimpleColors::HALF);
+
+            const uint8_t r_full = blend(r, (*weightOfRGB)[0], SimpleColors::FULL);
+            const uint8_t g_full = blend(g, (*weightOfRGB)[1], SimpleColors::FULL);
+            const uint8_t b_full = blend(b, (*weightOfRGB)[2], SimpleColors::FULL);
+
+        	const uint8_t r_zero = blend(r, (*weightOfRGB)[0], 0);
+        	const uint8_t g_zero = blend(g, (*weightOfRGB)[1], 0);
+        	const uint8_t b_zero = blend(b, (*weightOfRGB)[2], 0);
+
+
+            simplify_pixel(r, g, b,
+                r_third, g_third, b_third,
+                r_half,  g_half,  b_half,
+                r_full,  g_full,  b_full,
+                r_zero, g_zero, b_zero,
+                tolerance);
+        }
+    }
+    return results;
 }
 
-Image& Image::simplify_to_dominant_color_combinations_without_average(
-			const int tolerance,
-			const uint8_t r_third, const uint8_t g_third, const uint8_t b_third,
-			const uint8_t r_half, const uint8_t g_half, const uint8_t b_half,
-			const uint8_t r_full, const uint8_t g_full, const uint8_t b_full
-		) {
-
-	for (size_t i = 0; i < size; i += channels) {
-		uint8_t& r = data[i];
-		uint8_t& g = data[i + 1];
-		uint8_t& b = data[i + 2];
-
-		simplify_pixel(
-			r, g, b,
-			r_third, g_third, b_third,
-			r_half, g_half, b_half,
-			r_full, g_full, b_full,
-			tolerance
-		);
-	}
-	return *this;
-}
 
 std::optional<int> Image::sorting_pixels_by_brightness(const float proportion, const bool below) const
 {
@@ -315,66 +320,91 @@ Image& Image::black_and_white(const float proportion, const bool below) {
 //fraction by rectangles
 
 template<typename TransformFunc>
+// Applies a proportional transformation to specified regions of the image based on RGB intensity.
+// The transformation is applied to pixels either below or above a calculated threshold.
+// Parameters:
+//   - proportion: Fraction of pixels to consider for threshold calculation (0.0 to 1.0).
+//   - fraction: Determines the number of rectangles per row/column (2^fraction).
+//   - rectanglesToModify: Indices of rectangles to process.
+//   - below: If true, transform pixels below the threshold; otherwise, transform pixels above.
+//   - transformation: Function returning the value to apply to transformed pixels.
 Image& Image::apply_proportion_transformation_region_fraction(
     const float proportion,
     const int fraction,
     const std::vector<int>& rectanglesToModify,
-    const bool below,  // true = below, false = above
+    const bool below,
     TransformFunc transformation
 ) {
-    if (rectanglesToModify.empty() || proportion <= 0.0f || proportion > 1.0f) return *this;
+    // Early exit if inputs are invalid
+    if (rectanglesToModify.empty() || proportion <= 0.0f || proportion > 1.0f) {
+        return *this;
+    }
 
+    // Precompute constants to avoid repeated calculations
     const int numRectanglesPerRow = 1 << fraction;
     const int totalRectangles = numRectanglesPerRow * numRectanglesPerRow;
     const int rectWidth = w / numRectanglesPerRow;
     const int rectHeight = h / numRectanglesPerRow;
     const uint8_t transformValue = transformation();
 
-    for (const int rectIndex : rectanglesToModify) {
-        if (rectIndex < 0 || rectIndex >= totalRectangles) continue;
+    // Precompute the threshold index once
+    const size_t regionPixelCount = rectWidth * rectHeight;
+    const size_t thresholdIndex = static_cast<size_t>((regionPixelCount - 1) * proportion);
 
+    // Process each rectangle
+    for (const int rectIndex : rectanglesToModify) {
+        if (rectIndex < 0 || rectIndex >= totalRectangles) {
+            continue; // Skip invalid indices
+        }
+
+        // Calculate rectangle boundaries
         const int rectRow = rectIndex / numRectanglesPerRow;
         const int rectCol = rectIndex % numRectanglesPerRow;
         const int startX = rectCol * rectWidth;
         const int startY = rectRow * rectHeight;
-        const int endX = std::min((rectCol + 1) * rectWidth, w);
-        const int endY = std::min((rectRow + 1) * rectHeight, h);
+        const int endX = std::min(startX + rectWidth, w);
+        const int endY = std::min(startY + rectHeight, h);
 
-        const size_t regionPixelCount = (endX - startX) * (endY - startY);
-        std::vector<int> rgbValues(regionPixelCount);
+        // Extract RGB values for the current region
+        std::vector<int> rgbValues;
+        rgbValues.reserve(regionPixelCount);
 
-        size_t idx = 0;
         for (int y = startY; y < endY; ++y) {
             const size_t rowOffset = y * w * channels;
             for (int x = startX; x < endX; ++x) {
-                const size_t i = rowOffset + x * channels;
-                rgbValues[idx++] = data[i] + data[i + 1] + data[i + 2];
+                const size_t pixelOffset = rowOffset + x * channels;
+                rgbValues.push_back(data[pixelOffset] + data[pixelOffset + 1] + data[pixelOffset + 2]);
             }
         }
 
-        std::vector<int> sortedValues = rgbValues;
-        if (below) {
-            std::ranges::sort(sortedValues);
-        } else {
-            std::ranges::sort(sortedValues, std::greater{});
-        }
-    	const auto index = static_cast<size_t>((regionPixelCount - 1) * proportion);
+        // Sort the RGB values to find the threshold
+    	std::vector<int> sortedValues = rgbValues;
 
-    	const int threshold = sortedValues[index];
+    	const size_t nthIdx = below
+			? thresholdIndex
+			: (sortedValues.size() - 1 - thresholdIndex);
 
+    	std::ranges::nth_element(sortedValues, sortedValues.begin() + nthIdx
+	    );
+
+    	const int threshold = sortedValues[nthIdx];
+
+        // Apply the transformation to the region
         for (int y = startY; y < endY; ++y) {
             const size_t rowOffset = y * w * channels;
             for (int x = startX; x < endX; ++x) {
-                const size_t i = rowOffset + x * channels;
-                if (const int rgb = data[i] + data[i + 1] + data[i + 2];
-                	(below && rgb <= threshold) || (!below && rgb >= threshold)) {
-                    data[i] = data[i + 1] = data[i + 2] = transformValue;
+                const size_t pixelOffset = rowOffset + x * channels;
+
+                if (const int rgb = data[pixelOffset] + data[pixelOffset + 1] + data[pixelOffset + 2];
+	                (below && rgb <= threshold) || (!below && rgb >= threshold)) {
+                    data[pixelOffset] = data[pixelOffset + 1] = data[pixelOffset + 2] = transformValue;
                 }
             }
         }
     }
     return *this;
 }
+
 
 Image& Image::proportion_region_fraction(
     const float proportion,
@@ -515,7 +545,7 @@ Image& Image::std_convolve_clamp_to_border(const uint8_t channel, const uint32_t
 }
 
 
-Image& Image::std_convolve_cyclic(const uint8_t channel, const uint32_t ker_w, const uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc) {
+Image& Image::std_convolve_cyclic(const uint8_t channel, const uint32_t ker_w, const uint32_t ker_h, double ker[], const uint32_t cr, const uint32_t cc) {
 	uint8_t new_data[w*h];
 	const uint64_t center = cr*ker_w + cc;
 	for(uint64_t k=channel; k<size; k+=channels) {
@@ -578,7 +608,7 @@ void Image::fft(const uint32_t n, std::complex<double> x[], std::complex<double>
 
 	while (sub_prob_size > 1) {
 		const uint32_t half = sub_prob_size >> 1;
-		std::complex<double> w_step(cos(-2 * M_PI / sub_prob_size), sin(-2 * M_PI / sub_prob_size));
+		const std::complex w_step(cos(-2 * M_PI / sub_prob_size), sin(-2 * M_PI / sub_prob_size));
 
 		for (uint32_t i = 0; i < sub_probs; ++i) {
 			const uint32_t j_begin = i * sub_prob_size;
