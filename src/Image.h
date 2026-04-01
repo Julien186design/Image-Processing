@@ -9,6 +9,7 @@
 #include <vector>
 #include <cmath>
 #include <optional>
+#include <span>
 
 //legacy feature of C
 #undef __STRICT_ANSI__
@@ -20,13 +21,25 @@
 
 #define STEG_HEADER_SIZE sizeof(uint32_t) * 8
 
+struct RGB {
+	uint8_t r, g, b;
+};
+
+struct SimplifyParams {
+	RGB third;
+	RGB half;
+	RGB full;
+	RGB zero;
+	int tolerance;
+};
+
 enum ImageType {
 	PNG, JPG, BMP, TGA
 };
 
 namespace SimpleColors {
 	constexpr uint8_t ONE_THIRD = 85;
-	constexpr uint8_t HALF = 127;
+	constexpr uint8_t HALF = 128;
 	constexpr uint8_t FULL = 255;
 }
 
@@ -155,18 +168,15 @@ struct Image {
 	Image& black_and_white(float proportion, bool below);
 
 	static void simplify_pixel(
-	uint8_t& r, uint8_t& g, uint8_t& b,
-	uint8_t r_val_third, uint8_t g_val_third, uint8_t b_val_third,
-	uint8_t r_val_half, uint8_t g_val_half, uint8_t b_val_half,
-	uint8_t r_val_full, uint8_t g_val_full, uint8_t b_val_full,
-	uint8_t r_val_zero, uint8_t g_val_zero, uint8_t b_val_zero,
-	int tolerance);
+		uint8_t& red, uint8_t& green, uint8_t& blue,
+		const SimplifyParams& param);
 
 
-	[[nodiscard]] std::vector<Image> simplify_to_dominant_color_combinations(
+	[[nodiscard]] auto simplify_to_dominant_color_combinations(
 		int tolerance,
-		const std::vector<float>* weightOfRGB
-	) const;
+		const std::vector<float>* weightOfRGB,
+		std::span<const float> tValues
+	) const -> std::vector<Image>;
 
 
 	template<typename TransformFunc>
