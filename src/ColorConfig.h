@@ -1,87 +1,121 @@
 #ifndef IMAGE_PROCESSING_COLORCONFIG_H
 #define IMAGE_PROCESSING_COLORCONFIG_H
 
+#include <mutex>
+
 #include "Image.h"
 #include "ProcessingConfig.h"
 
-struct WeightedColors {
-    std::vector<uint8_t> r_third, g_third, b_third;
-    std::vector<uint8_t> r_half, g_half, b_half;
-    std::vector<uint8_t> r_full, g_full, b_full;
-};
+// --- Hilbert 3D mapping ---
+// Converts (x,y,z) in [0, 2^bits - 1] to a Hilbert index.
+// Based on John Skilling's algorithm (compact, branch-light).
 
-inline WeightedColors calculateWeightedColors(
-    const std::vector<float>& weightOfRGB) {
-    if (weightOfRGB.size() != 3) {
-        throw std::invalid_argument("weightOfRGB must contain exactly 3 elements (R, G, B).");
+inline auto hilbert3D(uint32_t x, uint32_t y, uint32_t z, const uint32_t bits) -> uint32_t
+{
+    uint32_t index = 0;
+    uint32_t mask = 1U << (bits - 1);
+
+    for (uint32_t i = 0; i < bits; ++i) {
+        uint32_t h = 0;
+
+        // Extract current bit of each coordinate
+        const uint32_t xi = ((x & mask) != 0U) ? 1U : 0U;
+        const uint32_t yi = ((y & mask) != 0) ? 1U : 0U;
+        const uint32_t zi = ((z & mask) != 0U) ? 1U : 0U;
+
+        // Interleave bits (Gray code style ordering)
+        h = (xi << 2) | (yi << 1) | zi;
+
+        index = (index << 3) | h;
+
+        // Rotate / reflect (key step for Hilbert continuity)
+        if (yi == 0) {
+            if (zi == 1) {
+                x = (~x) & ((1U << bits) - 1);
+                y = (~y) & ((1U << bits) - 1);
+            }
+            std::swap(x, z);
+        }
+
+        mask >>= 1;
     }
 
-    auto clampAndCast = [](const float value) {
-        return static_cast<uint8_t>(std::min(255.0f, std::max(0.0f, value)));
-    };
-    return {
-        {clampAndCast(weightOfRGB[0] * SimpleColors::ONE_THIRD)},
-        {clampAndCast(weightOfRGB[1] * SimpleColors::ONE_THIRD)},
-        {clampAndCast(weightOfRGB[2] * SimpleColors::ONE_THIRD)},
-
-        {clampAndCast(weightOfRGB[0] * SimpleColors::HALF)},
-        {clampAndCast(weightOfRGB[1] * SimpleColors::HALF)},
-        {clampAndCast(weightOfRGB[2] * SimpleColors::HALF)},
-
-        {clampAndCast(weightOfRGB[0] * SimpleColors::FULL)},
-        {clampAndCast(weightOfRGB[1] * SimpleColors::FULL)},
-        {clampAndCast(weightOfRGB[2] * SimpleColors::FULL)}
-    };
+    return index;
 }
 
-
-inline std::vector<std::vector<float>> generateColorConfigs(
-    const bool binaryOnly = false)  // if true, only {0,1}^3 \ {0,0,0} configs
+inline auto generateColorConfigs(
+    const bool binaryOnly = false) -> std::vector<std::vector<float>>
 {
-    constexpr int n = static_cast<int>(
-        (parameters::weightOfRGB[1] - parameters::weightOfRGB[0]) /
-         parameters::weightOfRGB[2]);
-
-    constexpr int total_configs = (n + 1) * (n + 1) * (n + 1);
+    constexpr int size = parameters::iterationsRGB + 1;
 
     std::vector<std::vector<float>> configs;
-    configs.reserve(binaryOnly ? 7 : total_configs);
+    configs.reserve(size * size * size);
 
-    // Lambda to convert a discrete index to its float weight
     auto toWeight = [](const int idx) -> float {
         return parameters::weightOfRGB[0] +
-               static_cast<float>(idx) * parameters::weightOfRGB[2];
+               (static_cast<float>(idx) * parameters::weightOfRGB[2]);
     };
 
-    bool reverse_j = false;
+    if (binaryOnly) {
+        const std::array<std::array<float,3>, 7> corners = {{
+            {1, 0, 0},
+            {0, 1, 0},
+            {1, 1, 0},
+            {0, 0, 1},
+            {1, 0, 1},
+            {0, 1, 1},
+            {1, 1, 1},
+        }};
+        for (const auto& [k, j, i] : corners) { // NOLINT(llvmlibc-callee-namespace)
+            configs.push_back({ k, j, i });
+}
+        return configs;
+    }
 
-    for (int i = 0; i <= n; ++i) {
-        bool reverse_k = false;
+    // --- Step 1: build full grid with integer coordinates ---
+    struct Node {
+        uint32_t x, y, z;
+        uint32_t hilbert;
+    };
 
-        // Snake-order on j: alternate direction each row
-        const int j_start = reverse_j ? n : 0;
-        const int j_end   = reverse_j ? 0 : n;
-        const int j_step  = reverse_j ? -1 : 1;
+    std::vector<Node> nodes;
+    nodes.reserve(size * size * size);
 
-        for (int j = j_start; j != j_end + j_step; j += j_step) {
-            // Snake-order on k: alternate direction each row
-            const int k_start = reverse_k ? n : 0;
-            const int k_end   = reverse_k ? 0 : n;
-            const int k_step  = reverse_k ? -1 : 1;
+    // Determine number of bits needed
+    uint32_t bits = 0;
+    while ((1U << bits) < static_cast<uint32_t>(size)) { ++bits;
+}
 
-            for (int k = k_start; k != k_end + k_step; k += k_step) {
-                // binaryOnly: keep only corner indices {0, n}^3, exclude {0,0,0}
-                if (binaryOnly) {
-                    if ((i > 0 && i < n) || (j > 0 && j < n) || (k > 0 && k < n))
-                        continue;
-                    if ((i | j | k) == 0)
-                        continue;
-                }
-                configs.push_back({ toWeight(k), toWeight(j), toWeight(i) });
+    for (uint32_t i = 0; i <= static_cast<uint32_t>(parameters::iterationsRGB); ++i) {
+        for (uint32_t j = 0; j <= static_cast<uint32_t>(parameters::iterationsRGB); ++j) {
+            for (uint32_t k = 0; k <= static_cast<uint32_t>(parameters::iterationsRGB); ++k) {
+
+                // Normalize to power-of-two grid
+                const uint32_t x = k;
+                const uint32_t y = j;
+                const uint32_t z = i;
+
+                nodes.push_back({
+                    x, y, z,
+                    hilbert3D(x, y, z, bits) // NOLINT(llvmlibc-callee-namespace)
+                });
             }
-            reverse_k = !reverse_k;
         }
-        reverse_j = !reverse_j;
+    }
+
+    // --- Step 2: sort by Hilbert index ---
+    std::ranges::sort(nodes,
+                      [](const Node& a, const Node& b) {
+                          return a.hilbert < b.hilbert;
+                      });
+
+    // --- Step 3: convert to float configs ---
+    for (const auto& node : nodes) {
+        configs.push_back({
+            toWeight(static_cast<int>(node.x)),
+            toWeight(static_cast<int>(node.y)),
+            toWeight(static_cast<int>(node.z))
+        });
     }
 
     return configs;
@@ -89,42 +123,82 @@ inline std::vector<std::vector<float>> generateColorConfigs(
 
 struct OneColorPipeline {
     const std::vector<std::vector<float>> configs;
-    const bool integerMode;
+    const std::vector<float> tValues;
 
-    explicit OneColorPipeline(
-        const bool binaryOnly  = false,
-        const bool integerMode = false)
-        : configs(generateColorConfigs(binaryOnly))
-        , integerMode(integerMode)
-    {}
+    static OneColorPipeline forStatic()    { return OneColorPipeline(true); }
+    static OneColorPipeline forStreaming() { return OneColorPipeline(false);  }
 
     struct ConfigParams {
-        std::vector<uint8_t> r_third, g_third, b_third;
-        std::vector<uint8_t> r_half,  g_half,  b_half;
-        std::vector<uint8_t> r_full,  g_full,  b_full;
         std::string weightedColors;
     };
 
+    [[nodiscard]] static size_t outputCount() {
+        return parameters::numProportionSteps + 1;
+    }
+
     [[nodiscard]] ConfigParams buildParams(const size_t configIdx) const {
-        const auto& config = configs[configIdx];
-        const auto [r_third, g_third, b_third,
-                    r_half,  g_half,  b_half,
-                    r_full,  g_full,  b_full] = calculateWeightedColors(config);
-        return { r_third, g_third, b_third,
-                 r_half,  g_half,  b_half,
-                 r_full,  g_full,  b_full,
-                 OutputPathBuilder::writingWeightedColors(config, integerMode) };
+        return { OutputPathBuilder::writingWeightedColors(configs[configIdx]) };
     }
 
     [[nodiscard]] size_t configCount() const { return configs.size(); }
+    [[nodiscard]] size_t passCount()   const { return tValues.size(); }
 
-    [[nodiscard]] std::vector<Image> apply(const Image& img, const int tolerance,
-               const size_t configIdx) const {
+    // Used by oneColorTransformations (static images):
+    // passes = parameters::numProportionSteps (empty span triggers that path).
+    [[nodiscard]] auto applyStatic(
+        const Image& img,
+        const int tolerance,
+        const size_t configIdx
+    ) const -> std::vector<Image> {
+        return img.simplify_to_dominant_color_combinations(
+            tolerance,
+            &configs[configIdx],
+            {}
+        );
+    }
+
+    [[nodiscard]] std::vector<Image> applyStreaming(
+        const Image& img,
+        const int tolerance,
+        const size_t configIdx
+    ) const {
+        std::call_once(tValuesPrinted, [this]() {
+            std::cout << "tValues: [";
+            for (size_t i = 0; i < tValues.size(); ++i) {
+                std::cout << tValues[i];
+                if (i != tValues.size() - 1) { std::cout << ", ";
+}
+            }
+            std::cout << "]" << std::endl;
+        });
 
         return img.simplify_to_dominant_color_combinations(
             tolerance,
-            &configs[configIdx]
+            &configs[configIdx],
+            tValues
         );
+    }
+
+private:
+    mutable std::once_flag tValuesPrinted;
+
+    explicit OneColorPipeline(const bool binaryOnly)
+        : configs(generateColorConfigs(binaryOnly))
+        , tValues(buildTValues())
+    {}
+
+    static std::vector<float> buildTValues() {
+        std::vector<float> values;
+        constexpr float from = parameters::passesRGB[0];
+        constexpr float to   = parameters::passesRGB[1];
+        constexpr float step = parameters::passesRGB[2];
+        constexpr int steps  = static_cast<int>((to - from) / step);
+
+        for (int i = 0; i <= steps; ++i) {
+            const float tVal = from + static_cast<float>(i) * step;
+            values.push_back(std::clamp(tVal, std::min(from, to), std::max(from, to)));
+        }
+        return values;
     }
 };
 
