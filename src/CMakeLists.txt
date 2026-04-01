@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 project(Image_Processing)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # Standard C++20
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -21,24 +23,24 @@ endif()
 
 # Exécutable principal
 add_executable(video_transform
+        ColorConfig.h
+        EdgeDetector.h
         Image.cpp
         Image.h
-        ImageProcessing.h
-        main.cpp
-        schrift.h
-        VideoProcessing.h
-        ProcessingConfig.h
-        ProcessingConfig.cpp
+        ImageBuffer.h
         ImageCreation.cpp
         ImageCreation.h
+        main.cpp
+        ProcessingConfig.h
+        ProcessingConfig.cpp
+        schrift.h
+        VideoProcessing.h
         VideoCreation.cpp
         VideoCreation.h
-        ImageProcessing.cpp
 )
 
 # Lien avec OpenCV et OpenMP
 target_link_libraries(video_transform PRIVATE ${OpenCV_LIBS} OpenMP::OpenMP_CXX)
-
 
 include(CheckCXXCompilerFlag)
 CHECK_CXX_COMPILER_FLAG("-mavx2" COMPILER_SUPPORTS_AVX2)
