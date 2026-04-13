@@ -16,9 +16,6 @@ void oneColorTransformations(
     constexpr std::array tol_values = { tol_min, tol_max };
 
     const size_t total_iterations = pipeline.configCount() * tol_values.size();
-    std::cout << "pipe " << pipeline.configCount() << " configs" << std::endl;
-    std::cout << "tol_v " << tol_values.size() << std::endl;
-    std::cout << "total " << total_iterations << std::endl;
 
 #pragma omp parallel default(none) \
     shared(baseImage, pipeline, baseName, total_iterations, tol_values)
