@@ -5,6 +5,8 @@
 
 #include "Image.h"
 #include "ProcessingConfig.h"
+#include <ostream>
+#include <vector>
 
 // --- Hilbert 3D mapping ---
 // Converts (x,y,z) in [0, 2^bits - 1] to a Hilbert index.
@@ -24,9 +26,9 @@ inline auto hilbert3D(uint32_t x, uint32_t y, uint32_t z, const uint32_t bits) -
         const uint32_t zi = ((z & mask) != 0U) ? 1U : 0U;
 
         // Interleave bits (Gray code style ordering)
-        h = (xi << 2) | (yi << 1) | zi;
+        h = (xi << 2U) | (yi << 1U) | zi;
 
-        index = (index << 3) | h;
+        index = (index << 3U) | h;
 
         // Rotate / reflect (key step for Hilbert continuity)
         if (yi == 0) {
@@ -37,23 +39,25 @@ inline auto hilbert3D(uint32_t x, uint32_t y, uint32_t z, const uint32_t bits) -
             std::swap(x, z);
         }
 
-        mask >>= 1;
+        mask >>= 1U;
     }
 
     return index;
 }
 
+
+
 inline auto generateColorConfigs(
-    const bool binaryOnly = false) -> std::vector<std::vector<float>>
+    const bool binaryOnly) -> std::vector<std::vector<float>>
 {
-    constexpr int size = parameters::iterationsRGB + 1;
+    constexpr int size = parameters::iterationsRGB;
 
     std::vector<std::vector<float>> configs;
     configs.reserve(size * size * size);
 
     auto toWeight = [](const int idx) -> float {
-        return parameters::weightOfRGB[0] +
-               (static_cast<float>(idx) * parameters::weightOfRGB[2]);
+        return std::get<0>(parameters::weightOfRGB) +
+               (static_cast<float>(idx) * std::get<2>(parameters::weightOfRGB));
     };
 
     if (binaryOnly) {
@@ -66,58 +70,33 @@ inline auto generateColorConfigs(
             {0, 1, 1},
             {1, 1, 1},
         }};
-        for (const auto& [k, j, i] : corners) { // NOLINT(llvmlibc-callee-namespace)
+        for (const auto& [k, j, i] : corners) { 
             configs.push_back({ k, j, i });
 }
+        std::cout << "binaryOnly: [";
+        for (size_t i = 0; i < configs.size(); ++i) {
+            std::cout << configs.at(i);
+            if (i != configs.size() - 1) { std::cout << ", ";
+            }
+        }
+        std::cout << "]" << '\n';
         return configs;
     }
 
-    // --- Step 1: build full grid with integer coordinates ---
-    struct Node {
-        uint32_t x, y, z;
-        uint32_t hilbert;
-    };
+    for (int i = 0; i < parameters::iterationsRGB; ++i) {
+        configs.push_back({ 1, 0, toWeight(i) });
+    }
 
-    std::vector<Node> nodes;
-    nodes.reserve(size * size * size);
-
-    // Determine number of bits needed
-    uint32_t bits = 0;
-    while ((1U << bits) < static_cast<uint32_t>(size)) { ++bits;
-}
-
-    for (uint32_t i = 0; i <= static_cast<uint32_t>(parameters::iterationsRGB); ++i) {
-        for (uint32_t j = 0; j <= static_cast<uint32_t>(parameters::iterationsRGB); ++j) {
-            for (uint32_t k = 0; k <= static_cast<uint32_t>(parameters::iterationsRGB); ++k) {
-
-                // Normalize to power-of-two grid
-                const uint32_t x = k;
-                const uint32_t y = j;
-                const uint32_t z = i;
-
-                nodes.push_back({
-                    x, y, z,
-                    hilbert3D(x, y, z, bits) // NOLINT(llvmlibc-callee-namespace)
-                });
-            }
+    for (int i = 1; i < parameters::iterationsRGB; ++i) {
+        configs.push_back({ 1, toWeight(i), 1 });
+    }
+    std::cout << "Complete: [\n";
+    for (size_t i = 0; i < configs.size(); ++i) {
+        std::cout << i << " - " << configs.at(i);
+        if (i != configs.size() - 1) { std::cout << "\n";
         }
     }
-
-    // --- Step 2: sort by Hilbert index ---
-    std::ranges::sort(nodes,
-                      [](const Node& a, const Node& b) {
-                          return a.hilbert < b.hilbert;
-                      });
-
-    // --- Step 3: convert to float configs ---
-    for (const auto& node : nodes) {
-        configs.push_back({
-            toWeight(static_cast<int>(node.x)),
-            toWeight(static_cast<int>(node.y)),
-            toWeight(static_cast<int>(node.z))
-        });
-    }
-
+    std::cout << "]" << '\n';
     return configs;
 }
 
@@ -137,46 +116,43 @@ struct OneColorPipeline {
     }
 
     [[nodiscard]] ConfigParams buildParams(const size_t configIdx) const {
-        return { OutputPathBuilder::writingWeightedColors(configs[configIdx]) };
+        return { OutputPathBuilder::writingWeightedColors(configs.at(configIdx)) };
     }
 
     [[nodiscard]] size_t configCount() const { return configs.size(); }
     [[nodiscard]] size_t passCount()   const { return tValues.size(); }
+    [[nodiscard]] const std::vector<float>& getTValues() const { return tValues; }
 
     // Used by oneColorTransformations (static images):
     // passes = parameters::numProportionSteps (empty span triggers that path).
     [[nodiscard]] auto applyStatic(
-        const Image& img,
-        const int tolerance,
-        const size_t configIdx
+        const Image& img, const int tolerance, const size_t configIdx
     ) const -> std::vector<Image> {
-        return img.simplify_to_dominant_color_combinations(
-            tolerance,
-            &configs[configIdx],
-            {}
+        std::vector<Image> out;
+        out.reserve(outputCount());
+        img.simplify_to_dominant_color_combinations(
+            tolerance, &configs.at(configIdx), {},
+            [&out](Image&& result) {
+                out.push_back(std::move(result));
+                return true; // always continue
+            }
         );
+        return out;
     }
 
     [[nodiscard]] std::vector<Image> applyStreaming(
-        const Image& img,
-        const int tolerance,
-        const size_t configIdx
+        const Image& img, const int tolerance, const size_t configIdx
     ) const {
-        std::call_once(tValuesPrinted, [this]() {
-            std::cout << "tValues: [";
-            for (size_t i = 0; i < tValues.size(); ++i) {
-                std::cout << tValues[i];
-                if (i != tValues.size() - 1) { std::cout << ", ";
-}
+        std::vector<Image> out;
+        out.reserve(tValues.size());
+        img.simplify_to_dominant_color_combinations(
+            tolerance, &configs.at(configIdx), tValues,
+            [&out](Image&& result) {
+                out.push_back(std::move(result));
+                return true;
             }
-            std::cout << "]" << std::endl;
-        });
-
-        return img.simplify_to_dominant_color_combinations(
-            tolerance,
-            &configs[configIdx],
-            tValues
         );
+        return out;
     }
 
 private:
@@ -189,13 +165,11 @@ private:
 
     static std::vector<float> buildTValues() {
         std::vector<float> values;
-        constexpr float from = parameters::passesRGB[0];
-        constexpr float to   = parameters::passesRGB[1];
-        constexpr float step = parameters::passesRGB[2];
-        constexpr int steps  = static_cast<int>((to - from) / step);
+        const auto [from, to, step] = parameters::passesRGB;
+        const int steps  = static_cast<int>((to - from) / step);
 
         for (int i = 0; i <= steps; ++i) {
-            const float tVal = from + static_cast<float>(i) * step;
+            const float tVal = from + (static_cast<float>(i) * step);
             values.push_back(std::clamp(tVal, std::min(from, to), std::max(from, to)));
         }
         return values;
