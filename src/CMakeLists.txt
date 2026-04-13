@@ -11,18 +11,19 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include_directories(${CMAKE_SOURCE_DIR}/stb)
 
 # Détection d'OpenCV
+set(OpenCV_DIR "/usr/lib/x86_64-linux-gnu/cmake/opencv4")
 find_package(OpenCV REQUIRED)
 
 # Activation de OpenMP
 find_package(OpenMP REQUIRED)
 if(OPENMP_FOUND)
-    message(STATUS "OpenMP trouvé, activation du support multithread.")
+    message(STATUS "OpenMP found; multithreading support enabled.")
 else()
-    message(FATAL_ERROR "OpenMP non trouvé. Installez-le avec 'sudo apt install libomp-dev'.")
+    message(FATAL_ERROR "OpenMP not found. Install it using 'sudo apt install libomp-dev'.")
 endif()
 
 # Exécutable principal
-add_executable(video_transform
+add_executable(Image_and_video_processing
         ColorConfig.h
         EdgeDetector.h
         Image.cpp
@@ -34,34 +35,28 @@ add_executable(video_transform
         ProcessingConfig.h
         ProcessingConfig.cpp
         schrift.h
-        VideoProcessing.h
-        VideoCreation.cpp
         VideoCreation.h
+        VideoCreation.cpp
+        VideoProcessing.h
 )
 
 # Lien avec OpenCV et OpenMP
-target_link_libraries(video_transform PRIVATE ${OpenCV_LIBS} OpenMP::OpenMP_CXX)
+target_link_libraries(Image_and_video_processing PRIVATE ${OpenCV_LIBS} OpenMP::OpenMP_CXX)
 
 include(CheckCXXCompilerFlag)
 CHECK_CXX_COMPILER_FLAG("-mavx2" COMPILER_SUPPORTS_AVX2)
 CHECK_CXX_COMPILER_FLAG("-fopenmp" COMPILER_SUPPORTS_OPENMP)
 
-if(COMPILER_SUPPORTS_AVX2)
-    message(STATUS "AVX2 supporté, optimisation pour ton processeur.")
-    target_compile_options(video_transform PRIVATE
-            -O3
-            -march=native
-            -mavx2
-            -mfma
-    )
-else()
-    message(WARNING "AVX2 non supporté, optimisation générique appliquée.")
-    target_compile_options(video_transform PRIVATE -O3)
-endif()
+target_compile_options(Image_and_video_processing PRIVATE
+        -O3
+        -march=native
+        -mavx2
+        -mfma
+)
 
 if(COMPILER_SUPPORTS_OPENMP)
-    message(STATUS "OpenMP supporté, activation des flags de compilation.")
-    target_compile_options(video_transform PRIVATE -fopenmp)
+    message(STATUS "OpenMP support, enabling compilation flags.")
+    target_compile_options(Image_and_video_processing PRIVATE -fopenmp)
 else()
-    message(FATAL_ERROR "Le compilateur ne supporte pas OpenMP. Vérifie ton installation de GCC.")
+    message(FATAL_ERROR "The compiler does not support OpenMP. Check your GCC installation.")
 endif()
