@@ -931,11 +931,11 @@ Image& Image::diffmap_scale(Image& img, uint8_t scl) {
 
 Image& Image::grayscale_avg() {
 	if(channels < 3) {
-		printf("Image %p has less than 3 channels, it is assumed to already be grayscale.", this);
+		Logger::err("Image ", this, " has less than 3 channels, it is assumed to already be grayscale.");
 	} else {
 		for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
 			//(r+g+b)/3
-			int gray = (data[i] + data[i+1] + data[i+2])/3;
+			const int gray = (data[i] + data[i+1] + data[i+2])/3;
 			memset(data+i, gray, 3);
 		}
 	}
@@ -945,7 +945,7 @@ Image& Image::grayscale_avg() {
 
 Image& Image::grayscale_lum() {
 	if(channels < 3) {
-		printf("Image %p has less than 3 channels, it is assumed to already be grayscale.", this);
+		Logger::err("Image ", this, " has less than 3 channels, it is assumed to already be grayscale.");
 	} else {
 		for(size_t i = 0; i < size; i+=static_cast<size_t>(channels)) {
 			const double gray_d = 0.2126*data[i] + 0.7152*data[i+1] + 0.0722*data[i+2];
@@ -958,7 +958,7 @@ Image& Image::grayscale_lum() {
 
 Image& Image::color_mask(const float r, const float g, const float b) {
 	if (channels < 3) {
-		printf("\e[31m[ERROR] Color mask requires at least 3 channels, but this image has %d channels\e[0m\n", channels);
+		Logger::err("\033[31m[ERROR] Color mask requires at least 3 channels, but this image has ", channels, " channels\033[0m");
 	} else {
 		for (size_t i = 0; i < size; i += static_cast<size_t>(channels)) {
 			data[i]   = static_cast<uint8_t>(std::clamp(std::round(static_cast<float>(data[i])   * r), 0.0f, 255.0f));
@@ -973,7 +973,7 @@ Image& Image::color_mask(const float r, const float g, const float b) {
 Image& Image::encode_message(const char* message) {
 	const uint32_t len = strlen(message) * 8;
 	if(len + STEG_HEADER_SIZE > size) {
-		printf("\e[31m[ERROR] This message is too large (%lu bits / %zu bits)\e[0m\n", len+STEG_HEADER_SIZE, size);
+		Logger::err("\033[31m[ERROR] This message is too large (", len + STEG_HEADER_SIZE, " bits / ", size, " bits)\033[0m");
 		return *this;
 	}
 
@@ -1057,17 +1057,16 @@ Image& Image::overlay(const Image& source, const int x, const int y) {
 			uint8_t* dstPx = &data[(sx + x + (sy + y) * w) * channels];
 
 			const float srcAlpha = (source.channels < 4) ? 1.0f : (static_cast<float>(srcPx[3]) / 255.0f);
-			const float dstAlpha = (channels < 4) ? 1.0f : (static_cast<float>(dstPx[3]) / 255.0f);
 
 
-			if (srcAlpha > 0.99f && dstAlpha > 0.99f) {
+			if (const float dstAlpha = (channels < 4) ? 1.0f : (static_cast<float>(dstPx[3]) / 255.0f); srcAlpha > 0.99f && dstAlpha > 0.99f) {
 				if (source.channels >= channels) {
-					std::copy(srcPx, srcPx + channels, dstPx);
+					std::copy_n(srcPx, channels, dstPx);
 				} else {
-					std::fill(dstPx, dstPx + channels, srcPx[0]);
+					std::fill_n(dstPx, channels, srcPx[0]);
 				}
 			} else {
-				if (float outAlpha = srcAlpha + dstAlpha * (1.0f - srcAlpha); outAlpha < 0.01f) {
+				if (const float outAlpha = srcAlpha + dstAlpha * (1.0f - srcAlpha); outAlpha < 0.01f) {
 					std::fill_n(dstPx, channels, 0);
 				} else {
 					for (int chnl = 0; chnl < channels; ++chnl) {
