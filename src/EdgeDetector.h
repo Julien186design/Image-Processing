@@ -33,10 +33,10 @@ class EdgeDetectorPipeline {
 public:
 
     // Constructor: allocate all buffers once
-    EdgeDetectorPipeline(const int w, const int h, const double thresh = 0.09)
-        : width(w),
-          height(h),
-          imgSize(static_cast<size_t>(w) * h),
+    EdgeDetectorPipeline(const int width, const int height, const double thresh = 0.09)
+        : width(width),
+          height(height),
+          imgSize(static_cast<size_t>(width) * height),
           threshold(thresh),
           blurData(imgSize),
           tx(imgSize),
@@ -45,7 +45,7 @@ public:
           gy(imgSize),
           g(imgSize),
           outputRGB(imgSize * 3),
-          tempImg(w, h, 1)
+          tempImg(width, height, 1)
     {}
 
     const std::vector<uint8_t>& process(const uint8_t* grayData)
@@ -61,8 +61,9 @@ public:
         // -------------------------
         #pragma omp parallel for schedule(static) default(none) \
     		shared(blurData)
-        for (size_t k = 0; k < imgSize; ++k)
-            blurData[k] = tempImg.data[k] / 255.0;
+        for (size_t k = 0; k < imgSize; ++k) {
+            blurData.at(k) = tempImg.data[k] / 255.0;
+}
 
         // -------------------------
         // Stage 2: Horizontal derivative pass
@@ -75,11 +76,11 @@ public:
             {
                 const size_t idx = static_cast<size_t>(r) * width + c;
 
-                tx[idx] = blurData[idx + 1] - blurData[idx - 1];
+                tx.at(idx) = blurData.at(idx + 1) - blurData.at(idx - 1);
 
-                ty[idx] = 47.0 * blurData[idx + 1]
-                        + 162.0 * blurData[idx]
-                        + 47.0 * blurData[idx - 1];
+                ty.at(idx) = 47.0 * blurData.at(idx + 1)
+                        + 162.0 * blurData.at(idx)
+                        + 47.0 * blurData.at(idx - 1);
             }
         }
 
@@ -94,12 +95,12 @@ public:
             {
                 const size_t idx = static_cast<size_t>(r) * width + c;
 
-                gx[idx] = 47.0 * tx[(r + 1) * width + c]
-                        + 162.0 * tx[r * width + c]
-                        + 47.0 * tx[(r - 1) * width + c];
+                gx.at(idx) = 47.0  * tx.at(static_cast<size_t>(r + 1) * width + c)
+                           + 162.0 * tx.at(static_cast<size_t>(r)     * width + c)
+                           + 47.0  * tx.at(static_cast<size_t>(r - 1) * width + c);
 
-                gy[idx] = ty[(r + 1) * width + c]
-                        - ty[(r - 1) * width + c];
+                gy.at(idx) = ty.at(static_cast<size_t>(r + 1) * width + c)
+                           - ty.at(static_cast<size_t>(r - 1) * width + c);
             }
         }
 
