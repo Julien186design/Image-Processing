@@ -22,10 +22,10 @@
 
 Image::Image(const char* filename, const int channel_force) : channels(0) {
 	if (read(filename, channel_force)) {
-		printf("Read %s\n", filename);
+		Logger::log("Read ", filename);
 		size = w * h * channels;
 	} else {
-		printf("Failed to read %s\n", filename);
+		Logger::err("Failed to read ", filename);
 	}
 }
 
@@ -56,26 +56,27 @@ bool Image::write(const char* filename) const {
 	const ImageType type = get_file_type(filename);
 	int success;
 	switch (type) {
-		case PNG:
-			success = stbi_write_png(filename, w, h, channels, data, w*channels);
-			break;
-		case BMP:
-			success = stbi_write_bmp(filename, w, h, channels, data);
-			break;
-		case JPG:
-			success = stbi_write_jpg(filename, w, h, channels, data, 100);
-			break;
-		case TGA:
-			success = stbi_write_tga(filename, w, h, channels, data);
-			break;
+	case PNG:
+		success = stbi_write_png(filename, w, h, channels, data, w * channels);
+		break;
+	case BMP:
+		success = stbi_write_bmp(filename, w, h, channels, data);
+		break;
+	case JPG:
+		success = stbi_write_jpg(filename, w, h, channels, data, 100);
+		break;
+	case TGA:
+		success = stbi_write_tga(filename, w, h, channels, data);
+		break;
 	}
 	if (success != 0) {
-		printf("\e[32mWrote \e[36m%s\e[0m, %d, %d, %d, %zu\n", filename, w, h, channels, size);
+		// Green: "Wrote", Cyan: filename, then image dimensions (width, height, channels, size)
+		Logger::log("\e[32mWrote \e[36m", filename, "\e[0m, ", w, ", ", h, ", ", channels, ", ", size);
 		return true;
-	} else {
-		printf("\e[31;1m Failed to write \e[36m%s\e[0m, %d, %d, %d, %zu\n", filename, w, h, channels, size); //width, height
-		return false;
 	}
+	// Bold red: "Failed to write", Cyan: filename, then image dimensions
+	Logger::err("\e[31;1mFailed to write \e[36m", filename, "\e[0m, ", w, ", ", h, ", ", channels, ", ", size);
+	return false;
 }
 
 ImageType Image::get_file_type(const char* filename) {
