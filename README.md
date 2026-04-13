@@ -13,7 +13,7 @@ To run the code, you need to create two folders: "Input" and "Output".
 
 "Output" must contain the following subfolders:
 
-"120"
+"50"
 
 "BTB"
 
@@ -31,9 +31,7 @@ To run the code, you need to create two folders: "Input" and "Output".
 
 "Original black and white"
 
-"Reversal-BT"
-
-"Reversal-WT"
+"Reversal"
 
 "Reversed black and white"
 
@@ -48,4 +46,4 @@ To run the code, you need to create two folders: "Input" and "Output".
 "WTW Square"
 
 
-Note: The value 120 was chosen arbitrarily—feel free to modify or remove it. Don't forget to modify your code accordingly (FOLDER_120 in TransformationsConfig.h).
+Note: The value 50 was chosen arbitrarily—feel free to modify or remove it. Don't forget to modify your code accordingly (FOLDER_50 in ProcessingConfig.cpp).
