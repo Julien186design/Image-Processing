@@ -163,8 +163,7 @@ void Image::simplify_to_dominant_color_combinations(
     const std::function<bool(Image&&)>& onResult
 ) const {
     const size_t passes = tValues.empty()
-        ? static_cast<size_t>(parameters::numProportionSteps)
-        : tValues.size();
+        ? 3 : tValues.size();
 
     const size_t pixelCount = (size >= static_cast<size_t>(channels))
         ? (size - static_cast<size_t>(channels - 1))
