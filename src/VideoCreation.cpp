@@ -33,8 +33,8 @@ void one_color_transformations_streaming(
     }
 
     Logger::log("Frames to process : ", totalFrames);
-    std::cout << "configFrames " << configFrames << '\n';
-    std::cout << "TOLERANCE_RAM " << TOLERANCE_RAM << '\n';
+    Logger::log("configFrames ", configFrames, '\n');
+    Logger::log("TOLERANCE_RAM ", TOLERANCE_RAM, '\n');
 
     const std::string outputVideoPath =
         OutputPathBuilder::video_one_color(baseName, totalFrames, 0);
@@ -419,9 +419,9 @@ void edge_detector_video(
     const double fps_edge_detector_video = capture.get(cv::CAP_PROP_FPS);
 
     constexpr int startFrame = std::max(0, parameters::frames.at(0));
-    const int endFrame   = (parameters::frames.at(1) > totalFrames)
-                         ? totalFrames
-                         : parameters::frames.at(1);
+    const int endFrame = (parameters::frames.at(1) == 0 || parameters::frames.at(1) > totalFrames)
+                       ? totalFrames
+                       : parameters::frames.at(1);
     const int framesToProcess = endFrame - startFrame;
 
     if (framesToProcess <= 0) {
