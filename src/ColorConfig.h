@@ -8,44 +8,6 @@
 #include <ostream>
 #include <vector>
 
-// --- Hilbert 3D mapping ---
-// Converts (x,y,z) in [0, 2^bits - 1] to a Hilbert index.
-// Based on John Skilling's algorithm (compact, branch-light).
-
-inline auto hilbert3D(uint32_t x, uint32_t y, uint32_t z, const uint32_t bits) -> uint32_t
-{
-    uint32_t index = 0;
-    uint32_t mask = 1U << (bits - 1);
-
-    for (uint32_t i = 0; i < bits; ++i) {
-        uint32_t h = 0;
-
-        // Extract current bit of each coordinate
-        const uint32_t xi = ((x & mask) != 0U) ? 1U : 0U;
-        const uint32_t yi = ((y & mask) != 0) ? 1U : 0U;
-        const uint32_t zi = ((z & mask) != 0U) ? 1U : 0U;
-
-        // Interleave bits (Gray code style ordering)
-        h = (xi << 2U) | (yi << 1U) | zi;
-
-        index = (index << 3U) | h;
-
-        // Rotate / reflect (key step for Hilbert continuity)
-        if (yi == 0) {
-            if (zi == 1) {
-                x = (~x) & ((1U << bits) - 1);
-                y = (~y) & ((1U << bits) - 1);
-            }
-            std::swap(x, z);
-        }
-
-        mask >>= 1U;
-    }
-
-    return index;
-}
-
-
 
 inline auto generateColorConfigs(
     const bool binaryOnly) -> std::vector<std::vector<float>>
@@ -73,13 +35,6 @@ inline auto generateColorConfigs(
         for (const auto& [k, j, i] : corners) { 
             configs.push_back({ k, j, i });
 }
-        std::cout << "binaryOnly: [";
-        for (size_t i = 0; i < configs.size(); ++i) {
-            std::cout << configs.at(i);
-            if (i != configs.size() - 1) { std::cout << ", ";
-            }
-        }
-        std::cout << "]" << '\n';
         return configs;
     }
 
@@ -90,13 +45,15 @@ inline auto generateColorConfigs(
     for (int i = 1; i < parameters::iterationsRGB; ++i) {
         configs.push_back({ 1, toWeight(i), 1 });
     }
-    std::cout << "Complete: [\n";
-    for (size_t i = 0; i < configs.size(); ++i) {
-        std::cout << i << " - " << configs.at(i);
-        if (i != configs.size() - 1) { std::cout << "\n";
-        }
+    std::ostringstream oss;
+    oss << "Complete: [\n";
+    oss << "0 - " << configs.at(0) << "\n";
+    if (configs.size() > 1) {
+        oss << "  |\n  |\n";
+        oss << configs.size() - 1 << " - " << configs.at(configs.size() - 1);
     }
-    std::cout << "]" << '\n';
+    oss << "]";
+    Logger::log(oss.str());
     return configs;
 }
 
