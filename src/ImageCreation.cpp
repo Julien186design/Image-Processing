@@ -16,8 +16,9 @@ void oneColorTransformations(
     constexpr std::array tol_values = { tol_min, tol_max };
 
     const size_t total_iterations = pipeline.configCount() * tol_values.size();
-    std::cout << "tol_values.size --> " << tol_values.size() << std::endl;
-    std::cout << "total_iterations --> " << total_iterations << std::endl;
+    std::cout << "pipe " << pipeline.configCount() << " configs" << std::endl;
+    std::cout << "tol_v " << tol_values.size() << std::endl;
+    std::cout << "total " << total_iterations << std::endl;
 
 #pragma omp parallel default(none) \
     shared(baseImage, pipeline, baseName, total_iterations, tol_values)
@@ -27,7 +28,7 @@ void oneColorTransformations(
         std::error_code ec;
 
 #pragma omp for schedule(dynamic)
-        for (size_t iter = 0; iter < total_iterations; ++iter) {
+        for (size_t iter = 0; iter < 14; ++iter) {
 
             const size_t config_idx = iter / tol_values.size();
             const int tole          = tol_values.at(iter % tol_values.size());
@@ -36,7 +37,7 @@ void oneColorTransformations(
 
             // Check whether all output images for this (config, tolerance) already exist.
             // If so, skip the computation entirely.
-            constexpr size_t expected = 3;
+            constexpr size_t expected = 5;
             bool all_exist = true;
             for (size_t idx = 0; idx < expected; ++idx) {
                 path = OutputPathBuilder::image_one_color(baseName, weightedColors, tole, idx);
@@ -52,7 +53,7 @@ void oneColorTransformations(
                 tole, &pipeline.configs.at(config_idx), {},
                 [&](Image&& result) {
                     path = OutputPathBuilder::image_one_color(
-                        baseName, weightedColors, tole, idx++);
+                        baseName, weightedColors, tole, idx);
                     if (!std::filesystem::exists(path, ec)) {
                         result.write(path.c_str());
                     }
