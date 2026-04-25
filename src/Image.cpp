@@ -149,27 +149,23 @@ void Image::simplify_pixel(
 }
 
 
-// BEFORE (allocates `passes` full Image copies simultaneously):
-//   std::vector results(passes, *this);
-//   ... parallel loop writes into all copies ...
-//   return results;
-
-// AFTER: one Image allocated per pass, handed off immediately via callback.
-// Peak RAM = 1 Image (72 MB for 6000x4000x3) instead of passes * 1 Image.
 void Image::simplify_to_dominant_color_combinations(
     const int tolerance,
     const std::vector<float>* weightOfRGB,
     const std::span<const float> tValues,
+    const bool one_shot,
+    const bool original_to_amended,
     const std::function<bool(Image&&)>& onResult
 ) const {
-    const size_t passes = tValues.empty()
+    const size_t passes = one_shot ? 1 : tValues.empty()
         ? 3 : tValues.size();
 
     const size_t pixelCount = (size >= static_cast<size_t>(channels))
         ? (size - static_cast<size_t>(channels - 1))
         : 0;
 
-    for (size_t passe = 0; passe < passes; ++passe) {
+	for (size_t i = 0; i < passes; ++i) {
+		const size_t passe = original_to_amended ? i : (passes - 1 - i);
         // One copy at a time: replaces the bulk allocation.
         Image result(*this);
 
@@ -183,10 +179,10 @@ void Image::simplify_to_dominant_color_combinations(
         #pragma omp parallel for schedule(static) \
             default(none) shared(result, weightOfRGB) \
             firstprivate(t, tolerance, pixelCount)
-        for (size_t i = 0; i < pixelCount; i += static_cast<size_t>(channels)) {
-            uint8_t& red   = result.data[i];
-            uint8_t& green = result.data[i + 1];
-            uint8_t& blue  = result.data[i + 2];
+        for (size_t j = 0; j < pixelCount; j += static_cast<size_t>(channels)) {
+            uint8_t& red   = result.data[j];
+            uint8_t& green = result.data[j + 1];
+            uint8_t& blue  = result.data[j + 2];
 
             const uint8_t orig_r = red;
             const uint8_t orig_g = green;
@@ -544,7 +540,7 @@ Image& Image::std_convolve_clamp_to_0(const int channel, const int ker_w, const 
 
 Image& Image::std_convolve_clamp_to_border(const uint8_t channel, const uint32_t ker_w,
 	const uint32_t ker_h, const double ker[], const uint32_t cr, const uint32_t cc) {
-	uint8_t new_data[w*h];
+	std::vector<uint8_t> new_data(static_cast<size_t>(w) * h);
 	const uint64_t center = cr*ker_w + cc;
 	for(uint64_t k=channel; k<size; k+=channels) {
 		double c = 0;
@@ -576,7 +572,7 @@ Image& Image::std_convolve_clamp_to_border(const uint8_t channel, const uint32_t
 
 
 Image& Image::std_convolve_cyclic(const uint8_t channel, const uint32_t ker_w, const uint32_t ker_h, double ker[], const uint32_t cr, const uint32_t cc) {
-	uint8_t new_data[w*h];
+	std::vector<uint8_t> new_data(static_cast<size_t>(w) * h);
 	const uint64_t center = cr*ker_w + cc;
 	for(uint64_t k=channel; k<size; k+=channels) {
 		double c = 0;
@@ -881,6 +877,92 @@ Image& Image::convolve_clamp_to_border(const uint8_t channel, const uint32_t ker
 	}
 	return std_convolve_clamp_to_border(channel, ker_w, ker_h, ker, cr, cc);
 }
+
+Image applyDenoise(const Image& input, const float strength) {
+	if (strength <= 0.0f) {
+		return input; // copie
+	}
+
+	Image result(input);
+
+	// noyau gaussien 3x3 simple
+	double kernel[9] = {
+		1, 2, 1,
+		2, 4, 2,
+		1, 2, 1
+	};
+
+	// normalisation
+	for (double& v : kernel) {
+		v /= 16.0;
+	}
+
+	for (int c = 0; c < result.channels; ++c) {
+		result.convolve_clamp_to_border(c, 3, 3, kernel, 1, 1);
+	}
+
+	return result;
+}
+
+Image& Image::remove_haze_black_level() {
+
+	std::array<uint8_t, 3> min_val = {255,255,255};
+	std::array<uint8_t, 3> max_val = {0,0,0};
+
+	// 1. Find min/max per channel
+	for (size_t i = 0; i < size; i += channels) {
+		for (int c = 0; c < 3; ++c) {
+			min_val[c] = std::min(min_val[c], data[i + c]);
+			max_val[c] = std::max(max_val[c], data[i + c]);
+		}
+	}
+
+	// Avoid division by zero
+	for (int c = 0; c < 3; ++c) {
+		if (max_val[c] == min_val[c]) {
+			max_val[c] = min_val[c] + 1;
+		}
+	}
+
+	// 2. Normalize
+#pragma omp parallel for
+	for (size_t i = 0; i < size; i += channels) {
+		for (int c = 0; c < 3; ++c) {
+			float val = data[i + c];
+			val = (val - min_val[c]) * 255.0f / (max_val[c] - min_val[c]);
+			data[i + c] = static_cast<uint8_t>(std::clamp(val, 0.0f, 255.0f));
+		}
+	}
+
+	return *this;
+}
+
+Image& Image::local_contrast(const float strength) {
+
+	Image blurred(*this);
+
+	// même kernel que ton denoise
+	double kernel[9] = {
+		1,2,1,
+		2,4,2,
+		1,2,1
+	};
+
+	for (double& v : kernel) v /= 16.0;
+
+	for (int c = 0; c < channels; ++c) {
+		blurred.convolve_clamp_to_border(c, 3, 3, kernel, 1, 1);
+	}
+
+#pragma omp parallel for
+	for (size_t i = 0; i < size; ++i) {
+		float val = data[i] + strength * (data[i] - blurred.data[i]);
+		data[i] = static_cast<uint8_t>(std::clamp(val, 0.0f, 255.0f));
+	}
+
+	return *this;
+}
+
 Image& Image::convolve_cyclic(const uint8_t channel, const  uint32_t ker_w, const uint32_t ker_h, double ker[], const uint32_t cr, const uint32_t cc) {
 	if(ker_w*ker_h > 224) {
 		return fd_convolve_cyclic(channel, ker_w, ker_h, ker, cr, cc);
