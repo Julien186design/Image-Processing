@@ -45,21 +45,14 @@ inline auto generateColorConfigs(
     for (int i = 1; i < parameters::iterationsRGB; ++i) {
         configs.push_back({ 1, toWeight(i), 1 });
     }
-    std::ostringstream oss;
-    oss << "Complete: [\n";
-    oss << "0 - " << configs.at(0) << "\n";
-    if (configs.size() > 1) {
-        oss << "  |\n  |\n";
-        oss << configs.size() - 1 << " - " << configs.at(configs.size() - 1);
-    }
-    oss << "]";
-    Logger::log(oss.str());
+
     return configs;
 }
 
 struct OneColorPipeline {
     const std::vector<std::vector<float>> configs;
     const std::vector<float> tValues;
+    const std::vector<float> lastValues;
 
     static OneColorPipeline forStatic()    { return OneColorPipeline(true); }
     static OneColorPipeline forStreaming() { return OneColorPipeline(false);  }
@@ -79,6 +72,7 @@ struct OneColorPipeline {
     [[nodiscard]] size_t configCount() const { return configs.size(); }
     [[nodiscard]] size_t passCount()   const { return tValues.size(); }
     [[nodiscard]] const std::vector<float>& getTValues() const { return tValues; }
+    [[nodiscard]] const std::vector<float>& getLastValues() const { return lastValues; }
 
     // Used by oneColorTransformations (static images):
     // passes = parameters::numProportionSteps (empty span triggers that path).
@@ -88,7 +82,7 @@ struct OneColorPipeline {
         std::vector<Image> out;
         out.reserve(outputCount());
         img.simplify_to_dominant_color_combinations(
-            tolerance, &configs.at(configIdx), {},
+            tolerance, &configs.at(configIdx), {}, false, true,
             [&out](Image&& result) {
                 out.push_back(std::move(result));
                 return true; // always continue
@@ -103,7 +97,7 @@ struct OneColorPipeline {
         std::vector<Image> out;
         out.reserve(tValues.size());
         img.simplify_to_dominant_color_combinations(
-            tolerance, &configs.at(configIdx), tValues,
+            tolerance, &configs.at(configIdx), tValues, true, true,
             [&out](Image&& result) {
                 out.push_back(std::move(result));
                 return true;
@@ -118,6 +112,7 @@ private:
     explicit OneColorPipeline(const bool binaryOnly)
         : configs(generateColorConfigs(binaryOnly))
         , tValues(buildTValues())
+        , lastValues(fromColorsToOriginal())
     {}
 
     static std::vector<float> buildTValues() {
@@ -128,6 +123,15 @@ private:
         for (int i = 0; i <= steps; ++i) {
             const float tVal = from + (static_cast<float>(i) * step);
             values.push_back(std::clamp(tVal, std::min(from, to), std::max(from, to)));
+        }
+        return values;
+    }
+
+    static std::vector<float> fromColorsToOriginal() {
+        std::vector<float> values;
+
+        for (int i = 0; i < parameters::transition_to_the_original; ++i) {
+            values.push_back(static_cast<float>(i) / static_cast<float>(parameters::transition_to_the_original - 1));
         }
         return values;
     }
