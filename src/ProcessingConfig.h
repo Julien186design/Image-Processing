@@ -1,8 +1,8 @@
 #ifndef IMAGE_PROCESSING_PROCESSINGCONFIG_H
 #define IMAGE_PROCESSING_PROCESSINGCONFIG_H
 
-#define THREAD_OFFSET 3
-#define TOLERANCE_RAM 8
+#define THREAD_OFFSET 1
+#define TOLERANCE_RAM 16
 
 #include <string>
 #include <utility>
@@ -16,16 +16,17 @@
 #include <filesystem>
 
 struct parameters {
-    static constexpr std::array<float, 3> proportions = {0.F, 1.F, .025F};
-    static constexpr std::array<int, 3> colorNuances = {0, 80, 20}; // {first color, last color, step}
-    static constexpr std::array<int, 2> frames = {0, 600};
-    static constexpr int fps = 20;
+    static constexpr std::array<float, 3> proportions = {0.F, 1.F, .0025F};
+    static constexpr std::array<int, 3> colorNuances = {0, 80, 20}; // {first colorNuance, last colorNuance, step}
+    static constexpr std::array<int, 2> frames = {0, 0};
+    static constexpr int fps = 200;
     static constexpr int fraction = 3;
     static constexpr std::array<int, 2> rectangles = {40, 63};
     static constexpr std::array<int, 3> toleranceOneColor = {0, 50, 1};
     static constexpr std::array<float, 3> weightOfRGB = {0.F, 1.F, .1F};
     static constexpr std::array<float, 3> passesRGB = {1.F, 1.F, 1.F}; // 0 = original image, 1 = colored image
-    static constexpr bool complete_transformation_colors_by_proportion = false;
+    static constexpr float noiseReduction = 100.f;
+    static constexpr bool complete_transformation_colors_by_proportion = true;
     static constexpr bool oneColor = true;
     static constexpr bool totalReversal = false;
     static constexpr bool partial = false;
@@ -39,9 +40,12 @@ struct parameters {
     static constexpr int iterationsRGB =
         static_cast<int>((std::get<1>(weightOfRGB) - std::get<0>(weightOfRGB)) / std::get<2>(weightOfRGB)) + 1;
 
+    static constexpr int transition_to_the_original = 4 * fps;
+
 };
 
-const std::string folder_output = "Output/";
+inline const std::string folder_output = "Output/";
+
 struct ThresholdParams {
     bool below;
     bool dark;
@@ -249,6 +253,17 @@ public:
 
     static std::string video_edge_detector_temp(const std::string& baseName) {
         return std::format("{}{}_temp.mp4", folder_edgedetector, baseName);
+    }
+
+    static std::string video_corrected(const std::string& baseName,
+                                       int framesToProcess,
+                                       const int totalFrames,
+                                       const double fps) {
+        std::string range = (framesToProcess == totalFrames) ? " - " :
+                            std::format("{{{}-{}}} ", parameters::frames.at(0), parameters::frames.at(1));
+        return std::format("{}{} corrected - {} frames {}{} fps.mp4",
+                           folder_videos, baseName, framesToProcess, range,
+                           formatProportion(static_cast<float>(fps)));
     }
 
     static std::string video_one_color(const std::string& baseName, size_t nFrames, size_t idx) {
