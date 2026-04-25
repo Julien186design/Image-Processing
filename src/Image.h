@@ -57,6 +57,7 @@ namespace SimpleColors {
 	constexpr uint8_t FULL = 255;
 }
 
+
 struct Font;
 
 struct EdgeDetectorResult {
@@ -126,6 +127,7 @@ struct Image {
 
 	Image& std_convolve_clamp_to_0(int channel, int ker_w, int ker_h, const double *ker, int cr, int c);
 	Image& std_convolve_clamp_to_border(uint8_t channel, uint32_t ker_w, uint32_t ker_h, const double ker[], uint32_t cr, uint32_t cc);
+
 	Image& std_convolve_cyclic(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc);
 
 	static bool approx_equal(const uint8_t a, const  uint8_t b, const uint8_t tol) {
@@ -167,6 +169,8 @@ struct Image {
 
 	Image& convolve_linear(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc);
 	Image& convolve_clamp_to_border(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc);
+	Image& remove_haze_black_level();
+	Image& local_contrast(float strength);
 	Image& convolve_cyclic(uint8_t channel, uint32_t ker_w, uint32_t ker_h, double ker[], uint32_t cr, uint32_t cc);
 
 
@@ -187,9 +191,11 @@ struct Image {
 
 
 	void simplify_to_dominant_color_combinations(
-		const int tolerance,
+		int tolerance,
 		const std::vector<float>* weightOfRGB,
-		const std::span<const float> tValues,
+		std::span<const float> tValues,
+		bool one_shot,
+		bool original_to_amended,
 		const std::function<bool(Image&&)>& onResult
 	) const;
 
@@ -226,6 +232,8 @@ struct Image {
 
 
 };
+
+Image applyDenoise(const Image& input, float strength);
 
 inline ImageInfo extractImageInfo(const std::string& inputFile) {
 	const size_t dotPos = inputFile.find_last_of('.');
