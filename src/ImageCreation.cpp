@@ -65,61 +65,28 @@ void complete_transformations_by_proportion(
     const Image& baseImage,
     const std::string& baseName
 ) {
-    if constexpr (!parameters::complete_transformation_colors_by_proportion) {return;}
+    if constexpr (!parameters::complete_transformation_colors_by_proportion) { return; }
 
-    for (size_t i = 0; i < transformation_params.size(); ++i) {
+    // Fixed proportion steps: 25 %, 50 %, 75 %.
+    const std::vector<float> proportions = { 0.25f, 0.50f, 0.75f };
 
-        const auto& [suffix, output_dir] = total_step_by_step_entries.at(i);
-        const auto [below, dark] = transformation_params.at(i);
-
-        for (int colNua = parameters::colorNuances.at(0);
-             colNua <= parameters::colorNuances.at(1);
-             colNua += parameters::colorNuances.at(2)) {
-            constexpr float proportion = 0.5F;
-
-            ImageBuffer modified(baseImage.w, baseImage.h, baseImage.channels);
-            modified.resetFrom(baseImage);
-
-            modified.get().proportion_complete(proportion, colNua, dark, below);
-
-            const std::string path =
-                OutputPathBuilder::image_complete(
-                    folder_50,
-                    baseName,
-                    suffix,
-                    proportion,
-                    colNua
-                );
-
-            modified.saveAs(path.c_str());
-             }
-    }
-
-    // Build entries from the global step-by-step table
-    const std::vector entries(
-        total_step_by_step_entries.begin(),
-        total_step_by_step_entries.end()
-    );
-
-    // apply: delegate to proportion_complete using per-transform params
     auto apply = [](Image& img, const float proportion, const size_t transformIdx, const int colNua) -> bool {
-        if (proportion <= 0.0F || proportion >= 1.0F) { return false;
-}
+        if (proportion <= 0.0f) { return false; }
         const auto [below, dark] = transformation_params.at(transformIdx);
         img.proportion_complete(proportion, colNua, dark, below);
         return true;
     };
 
-    // buildPath: forward to the OutputPathBuilder, ignore colNua=0 sentinel when no nuance
     auto buildPath = [](const std::string& dir, const std::string& base,
                         const std::string& suffix, const float proportion, const int colNua) {
         return OutputPathBuilder::image_complete(dir, base, suffix, proportion, colNua);
     };
 
     run_transformations_by_proportion(
-        baseImage, baseName, entries,
+        baseImage, baseName, total_step_by_step_entries,
         apply, buildPath,
-        &parameters::colorNuances  // pass nuances → activates inner color loop
+        &parameters::colorNuances,
+        &proportions
     );
 }
 
