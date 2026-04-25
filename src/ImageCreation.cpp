@@ -34,7 +34,7 @@ void oneColorTransformations(
 
             // Check whether all output images for this (config, tolerance) already exist.
             // If so, skip the computation entirely.
-            constexpr size_t expected = 5;
+            static constexpr size_t expected = 5;
             bool all_exist = true;
             for (size_t idx = 0; idx < expected; ++idx) {
                 path = OutputPathBuilder::image_one_color(baseName, weightedColors, tole, idx);
@@ -47,7 +47,7 @@ void oneColorTransformations(
 
             size_t idx = 0;
             baseImage.simplify_to_dominant_color_combinations(
-                tole, &pipeline.configs.at(config_idx), {},
+                tole, &pipeline.configs.at(config_idx), {}, false, true,
                 [&](Image&& result) {
                     path = OutputPathBuilder::image_one_color(
                         baseName, weightedColors, tole, idx);
@@ -60,7 +60,6 @@ void oneColorTransformations(
         }
     }
 }
-
 
 void complete_transformations_by_proportion(
     const Image& baseImage,
@@ -210,9 +209,16 @@ bool processImageTransforms(
     Logger::log(inputPath);
 
     const Image image(inputPath.c_str(), 0);
+    const Image denoised = applyDenoise(image, parameters::noiseReduction);
+
+    Image corrected = denoised;
+    corrected.remove_haze_black_level();
+    corrected.local_contrast(0.5f);
 
     edge_detector_image(image, baseName);
-    oneColorTransformations(image, baseName);
+    oneColorTransformations(image, baseName + " 0");
+    oneColorTransformations(denoised, baseName + " 1 denoised");
+    oneColorTransformations(corrected, baseName + " 2 corrected");
     complete_transformations_by_proportion(image, baseName);
     reverse_transformations_by_proportion(image, baseName);
 
