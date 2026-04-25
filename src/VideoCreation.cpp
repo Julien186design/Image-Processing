@@ -22,19 +22,22 @@ void one_color_transformations_streaming(
     const auto pipeline = OneColorPipeline::forStreaming();
     const size_t configFrames = pipeline.configCount();
 
-    const size_t passCount   = pipeline.passCount();
-    const size_t totalFrames =
-        (configFrames + static_cast<size_t>(parameters::numTolerance) - 1)
-        * passCount;
+    const size_t phase1Frames = configFrames * pipeline.getTValues().size();
 
-    if (totalFrames < static_cast<size_t>(parameters::fps)) {
-        Logger::err(totalFrames, " frames for ",  parameters::fps, " FPS --> Video less than 1 second long, creation canceled");
+    constexpr size_t phase2Frames = parameters::numTolerance - 1;
+
+    const size_t phase3Frames = pipeline.getLastValues().size();
+
+    const size_t totalFrames = phase1Frames + phase2Frames + phase3Frames;
+
+    if (totalFrames - phase3Frames < static_cast<size_t>(parameters::fps)) {
+        Logger::err(totalFrames - phase3Frames, " frames for ",  parameters::fps,
+            " FPS (excluding phase3Frames) --> Video less than 1 second long, creation canceled");
         return;
     }
 
-    Logger::log("Frames to process : ", totalFrames);
-    Logger::log("configFrames ", configFrames, '\n');
-    Logger::log("TOLERANCE_RAM ", TOLERANCE_RAM, '\n');
+    Logger::log("Frames to process : ", totalFrames," --- configFrames ",
+        configFrames, " --- TOLERANCE_RAM ", TOLERANCE_RAM, '\n');
 
     const std::string outputVideoPath =
         OutputPathBuilder::video_one_color(baseName, totalFrames, 0);
@@ -59,6 +62,7 @@ void one_color_transformations_streaming(
                                  baseImageMat.channels());
     }
 
+    bool original_to_amended = true;
     // ── Phase 1: all configs at max tolerance ─────────────────────────────
     for (size_t phase = 0; phase < configFrames; ++phase) {
         std::memcpy(thread_imgs.at(0).data,
@@ -70,6 +74,8 @@ void one_color_transformations_streaming(
             parameters::toleranceOneColor.at(1),
             &pipeline.configs.at(phase),
             pipeline.getTValues(),
+            false,
+            original_to_amended,
             [&](Image&& result) {
                 const cv::Mat frame(
                     baseImageMat.rows, baseImageMat.cols,
@@ -80,6 +86,7 @@ void one_color_transformations_streaming(
                 return true;
             }
         );
+        original_to_amended = !original_to_amended;
     }
 
     // ── Phase 2: last config, decreasing tolerance ────────────────────────
@@ -87,7 +94,6 @@ void one_color_transformations_streaming(
     constexpr int tol_max  = parameters::toleranceOneColor.at(1);
     constexpr int tol_step = parameters::toleranceOneColor.at(2);
 
-    // AFTER: same pattern — one Image written and destroyed per pass.
     for (int tol = tol_max - tol_step; tol >= tol_min; tol -= tol_step) {
         const size_t configIdx = configFrames - 1;
         std::memcpy(thread_imgs.at(0).data,
@@ -98,7 +104,9 @@ void one_color_transformations_streaming(
         thread_imgs.at(0).simplify_to_dominant_color_combinations(
             tol,
             &pipeline.configs.at(configIdx),
-            pipeline.getTValues(),
+            {},
+            true,
+            true,
             [&](Image&& result) {
                 const cv::Mat frame(
                     baseImageMat.rows, baseImageMat.cols,
@@ -111,8 +119,33 @@ void one_color_transformations_streaming(
         );
     }
 
+    // ── Phase 3: transition from colored back to original (t: 1 → 0) ─────────
+    const std::vector<float> phase3Config = { 1.F, 1.F, 1.F };
+
+    std::memcpy(thread_imgs.at(0).data,
+                baseImageMat.data,
+                static_cast<size_t>(baseImageMat.cols)
+                * baseImageMat.rows * baseImageMat.channels());
+
+    thread_imgs.at(0).simplify_to_dominant_color_combinations(
+        parameters::toleranceOneColor.at(0),
+        &phase3Config,
+        pipeline.getLastValues(),
+        false,
+        false,
+        [&](Image&& result) {
+            const cv::Mat frame(
+                baseImageMat.rows, baseImageMat.cols,
+                baseImageMat.type(),
+                const_cast<void*>(
+                    static_cast<const void*>(result.data)));
+            writer.write(frame);
+            return true;
+        }
+    );
+
     writer.release();
-    Logger::log("\n", outputVideoPath, " --> video created");
+    Logger::log(outputVideoPath, " --> video created");
 }
 
 void reverse_transformations_by_proportion_streaming(
@@ -147,76 +180,63 @@ void reverse_transformations_by_proportion_streaming(
         if (!writerOpt) { continue; }
         cv::VideoWriter& writer = *writerOpt;
 
-        // Pre-allocate one working Image per thread to avoid per-iteration heap allocation
+        // Un buffer de travail par thread (réutilisé entre chunks)
         std::vector<Image> thread_imgs;
         thread_imgs.reserve(num_threads);
-        for (int thread = 0; thread < num_threads; ++thread) {
+        for (int t = 0; t < num_threads; ++t) {
             thread_imgs.emplace_back(width, height, channels);
         }
-
-        // perThreadResults[tid][local_phase]: one Image per (thread, chunk-local frame slot)
-        std::vector<std::vector<Image>> perThreadResults(num_threads);
 
         for (int phase_base = 0; phase_base < nFrames; phase_base += TOLERANCE_RAM) {
             const int phase_end  = std::min(phase_base + TOLERANCE_RAM, nFrames);
             const int chunk_size = phase_end - phase_base;
 
-            // Resize each thread's slot vector to cover this chunk
-            for (int thread = 0; thread < num_threads; ++thread) {
-                perThreadResults.at(thread).assign(chunk_size, Image(width, height, channels));
-            }
-
-            // Ceiling division: determines which thread owns each local slot
-            const int local_chunk =
-                (chunk_size + num_threads - 1) / num_threads;
+            // Vecteur plat indexé par local_phase — un slot par frame du chunk
+            std::vector<Image> chunkResults(chunk_size, Image(0, 0, 0));
 
             #pragma omp parallel for schedule(static) num_threads(num_threads) \
-            default(none) \
-            shared(baseImageMat, thread_imgs, perThreadResults, \
-                   phase_base, phase_end, below, width, height, channels)
+                default(none) \
+                shared(baseImageMat, thread_imgs, chunkResults, \
+                       phase_base, phase_end, below, width, height, channels)
             for (int phase = phase_base; phase < phase_end; ++phase) {
-                const int tid = omp_get_thread_num();
-                const int local_phase = phase - phase_base;
-
                 const float proportion =
                     parameters::proportions.at(0) +
                     (static_cast<float>(phase) * parameters::proportions.at(2));
 
-                // Skip p=0: reverse_by_proportion rejects proportion <= 0
                 if (proportion <= 0.0F) { continue; }
 
-                // Copy base image into this thread's working buffer
+                const int tid = omp_get_thread_num();
+                const int local_phase = phase - phase_base;
+
                 Image& img = thread_imgs.at(tid);
                 std::memcpy(img.data, baseImageMat.data,
                             static_cast<size_t>(width) * height * channels);
 
                 img.reverse_by_proportion(proportion, below);
 
-                // Store result in the slot owned by this thread for this chunk
-                perThreadResults.at(tid).at(local_phase) = img;
+                // Copie dans le slot plat — chaque local_phase est écrit par un seul thread
+                chunkResults.at(local_phase) = img;
             }
 
-            // Drain chunk in sequential phase order to preserve frame ordering
+            // Drain séquentiel dans l'ordre des frames
             for (int phase = phase_base; phase < phase_end; ++phase) {
-                const int local_phase  = phase - phase_base;
-                const int ownerThread  = local_phase / local_chunk;
+                const int local_phase = phase - phase_base;
 
                 const float proportion =
                     parameters::proportions.at(0) +
                     (static_cast<float>(phase) * parameters::proportions.at(2));
 
-                // Skip frames that were not produced (proportion <= 0)
                 if (proportion <= 0.0F) { continue; }
 
-                const Image& result = perThreadResults.at(ownerThread).at(local_phase);
+                const Image& result = chunkResults.at(local_phase);
                 const cv::Mat frame(height, width,
                                     baseImageMat.type(),
                                     const_cast<void*>(
                                         static_cast<const void*>(result.data)));
                 writer.write(frame);
 
-                // Release slot immediately after writing
-                perThreadResults.at(ownerThread).at(local_phase) = Image(0, 0, 0);
+                // Libération immédiate
+                chunkResults.at(local_phase) = Image(0, 0, 0);
             }
         }
 
@@ -441,7 +461,7 @@ void edge_detector_video(
         return;
     }
 
-    const size_t imgSize = static_cast<const size_t>(width * height);
+    const auto imgSize = static_cast<const size_t>(width * height);
     capture.set(cv::CAP_PROP_POS_FRAMES, startFrame);
 
     // Initialize pipeline ONCE before loop
@@ -513,6 +533,107 @@ void edge_detector_video(
     }
 }
 
+void corrected_video(
+    const std::string& baseName,
+    const std::string& inputPath
+) {
+    cv::VideoCapture capture(inputPath);
+    if (!capture.isOpened()) {
+        Logger::err("Error: cannot open ", inputPath);
+        return;
+    }
+
+    const int width       = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_WIDTH));
+    const int height      = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_HEIGHT));
+    const double fps      = capture.get(cv::CAP_PROP_FPS);
+    const int totalFrames = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_COUNT));
+
+    constexpr int startFrame = std::max(0, parameters::frames.at(0));
+    const int endFrame = (parameters::frames.at(1) == 0 || parameters::frames.at(1) > totalFrames)
+                       ? totalFrames
+                       : parameters::frames.at(1);
+    const int framesToProcess = endFrame - startFrame;
+
+    const std::string outputPath = OutputPathBuilder::video_corrected(baseName, framesToProcess, totalFrames, fps);
+
+    cv::VideoWriter writer;
+    writer.open(outputPath,
+                cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
+                fps,
+                cv::Size(width, height));
+    if (!writer.isOpened()) {
+        Logger::err("Error: cannot open video writer for ", outputPath);
+        return;
+    }
+
+    const int num_threads = computeNumThreads();
+    constexpr int channels = 3;
+    const size_t frameBytes = static_cast<size_t>(width) * height * channels;
+
+    // One reusable Image buffer per thread
+    std::vector<Image> thread_imgs;
+    thread_imgs.reserve(num_threads);
+    for (int t = 0; t < num_threads; ++t) {
+        thread_imgs.emplace_back(width, height, channels);
+    }
+
+    capture.set(cv::CAP_PROP_POS_FRAMES, startFrame);
+
+    // Read all frames into a flat buffer upfront (within the chunk)
+    // to avoid calling capture.read() from parallel threads (not thread-safe)
+    for (int chunk_base = 0; chunk_base < framesToProcess; chunk_base += TOLERANCE_RAM) {
+        const int chunk_end  = std::min(chunk_base + TOLERANCE_RAM, framesToProcess);
+        const int chunk_size = chunk_end - chunk_base;
+
+        // Read chunk_size raw frames sequentially from the capture
+        std::vector<std::vector<uint8_t>> rawFrames(chunk_size, std::vector<uint8_t>(frameBytes));
+        for (int i = 0; i < chunk_size; ++i) {
+            cv::Mat frameBGR(height, width, CV_8UC3);
+            if (!capture.read(frameBGR)) { break; }
+            std::memcpy(rawFrames.at(i).data(), frameBGR.data, frameBytes);
+        }
+
+        // One corrected Image slot per frame in the chunk
+        std::vector<Image> chunkResults(chunk_size, Image(0, 0, 0));
+
+        // Process frames in parallel — each thread works on a distinct frame slot
+        #pragma omp parallel for schedule(static) num_threads(num_threads) \
+            default(none) \
+            shared(rawFrames, chunkResults, thread_imgs, chunk_size, \
+                   width, height, channels, frameBytes)
+        for (int i = 0; i < chunk_size; ++i) {
+            const int tid = omp_get_thread_num();
+            Image& img = thread_imgs.at(tid);
+
+            std::memcpy(img.data, rawFrames.at(i).data(), frameBytes);
+
+            const Image denoised = applyDenoise(img, parameters::noiseReduction);
+            Image corrected = denoised;
+            corrected.remove_haze_black_level();
+            corrected.local_contrast(0.5f);
+
+            chunkResults.at(i) = corrected;
+        }
+
+        // Sequential drain: write frames in order
+        for (int i = 0; i < chunk_size; ++i) {
+            Logger::logProgress("Frame ", chunk_base + i + 1, "/", framesToProcess);
+
+            const cv::Mat frame(height, width, CV_8UC3,
+                                const_cast<void*>(
+                                    static_cast<const void*>(chunkResults.at(i).data)));
+            writer.write(frame);
+
+            // Free immediately to cap RAM usage
+            chunkResults.at(i) = Image(0, 0, 0);
+        }
+    }
+
+    capture.release();
+    writer.release();
+    Logger::log("\n", outputPath, " created");
+}
+
 void processVideoTransforms(
     const std::string& baseName,
     const std::string& inputPath
@@ -521,6 +642,7 @@ void processVideoTransforms(
     if (is_mp4_file(inputPath)) {
         Logger::log("MP4 file detected → edge_detector_video");
         edge_detector_video(baseName, inputPath);
+        corrected_video(baseName, inputPath);
     }
     else {
         Logger::log("Non-MP4 file detected → colored_transformations");
