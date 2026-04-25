@@ -4,7 +4,7 @@
 
 #include <chrono>
 
-// Définitions des variables déclarées extern dans le header
+// Definitions of variables declared as `extern` in the header
 const std::string folder_50          = std::string(folder_output) + "50/";
 const std::string folder_videos       = std::string(folder_output) + "Videos/";
 const std::string folder_edgedetector = std::string(folder_output) + "Edge Detector/";
