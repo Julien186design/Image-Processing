@@ -16,10 +16,10 @@
 #include <filesystem>
 
 struct parameters {
-    static constexpr std::array<float, 3> proportions = {0.F, 1.F, .0025F};
-    static constexpr std::array<int, 3> colorNuances = {0, 80, 20}; // {first colorNuance, last colorNuance, step}
+    static constexpr std::array<float, 3> proportions = {0.F, 1.F, .0125F};
+    static constexpr std::array<int, 3> colorNuances = {0, 80, 80}; // {first colorNuance, last colorNuance, step}
     static constexpr std::array<int, 2> frames = {0, 0};
-    static constexpr int fps = 200;
+    static constexpr int fps = 20;
     static constexpr int fraction = 3;
     static constexpr std::array<int, 2> rectangles = {40, 63};
     static constexpr std::array<int, 3> toleranceOneColor = {0, 50, 1};
@@ -27,12 +27,15 @@ struct parameters {
     static constexpr std::array<float, 3> passesRGB = {1.F, 1.F, 1.F}; // 0 = original image, 1 = colored image
     static constexpr float noiseReduction = 100.f;
     static constexpr bool complete_transformation_colors_by_proportion = true;
-    static constexpr bool oneColor = true;
+    static constexpr bool oneColor = false;
     static constexpr bool totalReversal = false;
     static constexpr bool partial = false;
     static constexpr bool partialInDiagonal = false;
     static constexpr int numProportionSteps =
-        static_cast<int>(std::get<1>(proportions) - std::get<0>(proportions)) / std::get<2>(proportions) + 1;
+        static_cast<int>((std::get<1>(proportions) - std::get<0>(proportions)) / std::get<2>(proportions)) + 1;
+
+    static constexpr int numColorNuances =
+        (std::get<1>(colorNuances) - std::get<0>(colorNuances)) / std::get<2>(colorNuances) + 1;
 
     static constexpr int numTolerance =
         (std::get<1>(toleranceOneColor) - std::get<0>(toleranceOneColor)) / std::get<2>(toleranceOneColor) + 1;
