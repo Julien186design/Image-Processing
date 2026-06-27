@@ -249,16 +249,13 @@ void several_colors_transformations_streaming(
     const std::string& baseName,
     const std::string& inputPath
 ) {
-    if constexpr (!parameters::complete_transformation_colors_by_proportion) {return;}
-    // Load the input image using OpenCV
-    auto imageOpt = loadImage(inputPath);
-    if (!imageOpt) { return;
-}
-    cv::Mat& baseImageMat = *imageOpt; // référence, pas de copie
+    if constexpr (!parameters::complete_transformation_colors_by_proportion) { return; }
 
-    // Calculate the number of steps and frames
-    constexpr int nFrames = 2 * parameters::numProportionSteps * (
-                ((parameters::colorNuances.at(1) - parameters::colorNuances.at(0)) / parameters::colorNuances.at(2)) + 1);
+    auto imageOpt = loadImage(inputPath);
+    if (!imageOpt) { return; }
+    cv::Mat& baseImageMat = *imageOpt;
+
+    constexpr int nFrames = parameters::numProportionSteps * (parameters::numColorNuances + 1);
 
     if constexpr (nFrames < parameters::fps) {
         Logger::err("Video less than 1 second long, creation canceled");
@@ -267,11 +264,8 @@ void several_colors_transformations_streaming(
 
     Logger::log("Frames to process : ", nFrames);
 
-    // Generate output video path
-    const std::string outputVideoPath = OutputPathBuilder::video_several_colors(
-        baseName, nFrames);
+    const std::string outputVideoPath = OutputPathBuilder::video_several_colors(baseName, nFrames);
 
-    // Initialize video writer
     cv::VideoWriter video(outputVideoPath,
                           cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
                           parameters::fps,
@@ -282,20 +276,18 @@ void several_colors_transformations_streaming(
         return;
     }
 
-    // Pre-compute RGB sums for thresholding
     const size_t pixelCount = baseImageMat.rows * baseImageMat.cols;
-    std::vector rgbSums(pixelCount, 0);
-
-    // Parallel computation of RGB sums
     const unsigned int numThreads = std::thread::hardware_concurrency();
-    std::vector<std::thread> threads;
     const size_t chunkSize = pixelCount / numThreads;
+    std::vector<std::thread> threads;
 
-    for (unsigned int thread = 0; thread < numThreads; ++thread) {
-        threads.emplace_back([&, thread]() {
-            const size_t start = thread * chunkSize;
-            const size_t end = (thread == numThreads - 1) ? pixelCount : (thread + 1) * chunkSize;
+    // Compute per-pixel RGB sums in parallel
+    std::vector<int> rgbSums(pixelCount, 0);
 
+    for (unsigned int t = 0; t < numThreads; ++t) {
+        threads.emplace_back([&, t]() {
+            const size_t start = t * chunkSize;
+            const size_t end = (t == numThreads - 1) ? pixelCount : (t + 1) * chunkSize;
             for (size_t i = start; i < end; ++i) {
                 const int row = static_cast<int>(i / baseImageMat.cols);
                 const int col = static_cast<int>(i % baseImageMat.cols);
@@ -304,59 +296,50 @@ void several_colors_transformations_streaming(
             }
         });
     }
-
-    for (auto& thread : threads) {
-        thread.join();
-    }
+    for (auto& t : threads) { t.join(); }
     threads.clear();
 
-    // Sort RGB sums to compute thresholds
+    // Sort RGB sums to derive proportion thresholds
     std::vector<int> sortedRGB = rgbSums;
     std::ranges::sort(sortedRGB);
 
     std::vector<int> thresholds(parameters::numProportionSteps);
     for (int i = 0; i < parameters::numProportionSteps; ++i) {
-        // const float cp = proportions.start + static_cast<float>(i) * proportions.step;
-        const float cp = parameters::proportions.at(0) + (static_cast<float>(i) * parameters::proportions[2]);
-        thresholds.at(i) = sortedRGB.at(std::min(
-        static_cast<size_t>(static_cast<float>(pixelCount) * cp),
-        pixelCount - 1
-));
+        const float cp = parameters::proportions.at(0) + (static_cast<float>(i) * parameters::proportions.at(2));
+        thresholds.at(i) = sortedRGB.at(
+            std::min(static_cast<size_t>(static_cast<float>(pixelCount) * cp), pixelCount - 1));
     }
 
-    // Pre-compute pixel masks in parallel
-    std::vector pixelMask(parameters::numProportionSteps, std::vector(pixelCount, false));
+    // Build per-step band masks: only pixels in the slice (thresholds[i-1], thresholds[i]]
+    // Step 0 covers [0, thresholds[0]]; step i>0 covers (thresholds[i-1], thresholds[i]].
+    std::vector pixelMask(parameters::numProportionSteps, std::vector<bool>(pixelCount, false));
 
     for (int propIdx = 0; propIdx < parameters::numProportionSteps; ++propIdx) {
-        for (unsigned int thread = 0; thread < numThreads; ++thread) {
-            threads.emplace_back([&, propIdx, thread]() {
-                const size_t start = thread * chunkSize;
-                const size_t end = (thread == numThreads - 1) ? pixelCount : (thread + 1) * chunkSize;
+        const int lowerBound = (propIdx == 0) ? -1 : thresholds.at(propIdx - 1);
+        const int upperBound = thresholds.at(propIdx);
 
+        for (unsigned int t = 0; t < numThreads; ++t) {
+            threads.emplace_back([&, propIdx, t, lowerBound, upperBound]() {
+                const size_t start = t * chunkSize;
+                const size_t end = (t == numThreads - 1) ? pixelCount : (t + 1) * chunkSize;
                 for (size_t pixelIdx = start; pixelIdx < end; ++pixelIdx) {
-                    if (rgbSums[pixelIdx] <= thresholds[propIdx]) {
-                        pixelMask[propIdx][pixelIdx] = true;
-                    }
+                    const int s = rgbSums[pixelIdx];
+                    pixelMask[propIdx][pixelIdx] = (s > lowerBound && s <= upperBound);
                 }
             });
         }
-
-        for (auto& thread : threads) {
-            thread.join();
-        }
+        for (auto& t : threads) { t.join(); }
         threads.clear();
     }
 
-    // Frame buffer and processing queue
     VideoWriterQueue queue(video);
 
-    // Lambda function to apply color transformation to pixels in parallel
+    // Apply a color value to pixels selected by mask, in parallel
     auto applyColorTransform = [&](cv::Mat& target, const std::vector<bool>& mask, const uint8_t newColor) {
         for (unsigned int t = 0; t < numThreads; ++t) {
-            threads.emplace_back([&, t]() {
+            threads.emplace_back([&, t, newColor]() {
                 const size_t start = t * chunkSize;
                 const size_t end = (t == numThreads - 1) ? pixelCount : (t + 1) * chunkSize;
-
                 for (size_t pixelIdx = start; pixelIdx < end; ++pixelIdx) {
                     if (mask[pixelIdx]) {
                         const size_t row = pixelIdx / baseImageMat.cols;
@@ -367,55 +350,72 @@ void several_colors_transformations_streaming(
                 }
             });
         }
-
-        for (auto& thread : threads) {
-            thread.join();
-        }
+        for (auto& t : threads) { t.join(); }
         threads.clear();
     };
 
-    // Lambda function to process frames with color transformations
+    // accumulated holds the image state built up across all previous steps.
+    // Each call to process() mutates only the band pixels of the current step,
+    // leaving all previously colored pixels intact.
+    cv::Mat accumulated = baseImageMat.clone();
+
+    // Process one proportion step: animate the band pixels through colorNuances
+    // up then down, starting from the current accumulated image state.
     auto process = [&](const int propIdx, const bool reverseOrder) {
+
+        Logger::log("auto process ", propIdx, "-", reverseOrder);
+
         const auto& mask = pixelMask.at(propIdx);
-        const int startIdx = reverseOrder ? 1 : 0;
-        const int reverseIdx = reverseOrder ? 0 : 1;
-        cv::Mat modifiedMat;
 
-        // Phase 1: Ascending colorNuance
-        for (int colorNuance = parameters::colorNuances.at(0); colorNuance <= parameters::colorNuances.at(1);
-             colorNuance += parameters::colorNuances.at(2)) {
-            if (colorNuance == parameters::colorNuances.at(0)) {
-                modifiedMat = baseImageMat.clone();
-            }
+        const int start =
+            reverseOrder
+                ? parameters::colorNuances.at(1)
+                : parameters::colorNuances.at(0);
 
-            const uint8_t newColor = (startIdx == 1) ? colorNuance : (255 - colorNuance);
-            applyColorTransform(modifiedMat, mask, newColor);
-            queue.enqueue(modifiedMat.clone());
-        }
+        const int end =
+            reverseOrder
+                ? parameters::colorNuances.at(0)
+                : parameters::colorNuances.at(1);
 
-        // Phase 2: Descending colorNuance
-        for (int colorNuance = parameters::colorNuances.at(1); colorNuance >= parameters::colorNuances.at(0);
-             colorNuance -= parameters::colorNuances.at(2)) {
-            const uint8_t newColor = (reverseIdx == 1) ? colorNuance : (255 - colorNuance);
-            applyColorTransform(modifiedMat, mask, newColor);
-            queue.enqueue(modifiedMat.clone());
-        }
+        const int step =
+            reverseOrder
+                ? -parameters::colorNuances.at(2)
+                : parameters::colorNuances.at(2);
+
+        Logger::log("ses ", start, "|", end, "|", step);
+
+        for (int colorNuance = start;
+             reverseOrder
+                 ? (colorNuance >= end)
+                 : (colorNuance <= end);
+             colorNuance += step) {
+
+            applyColorTransform(
+                accumulated,
+                mask,
+                static_cast<uint8_t>(colorNuance)
+            );
+
+            queue.enqueue(accumulated.clone());
+             }
+
+        // Stabilise la dernière couleur
+        applyColorTransform(
+            accumulated,
+            mask,
+            static_cast<uint8_t>(end)
+        );
     };
 
-    // Process each step with alternating order
     bool reverseOrder = false;
     for (int i = 0; i < parameters::numProportionSteps; ++i) {
-        // const float cp = proportions.start + static_cast<float>(i) * proportions.step;
         const float cp = parameters::proportions.at(0) + (static_cast<float>(i) * parameters::proportions.at(2));
-        Logger::log("Processing proportion ", cp);
         process(i, reverseOrder);
         reverseOrder = !reverseOrder;
+        ++i;
     }
 
-    // Signal completion and wait for writer thread
     queue.finish();
-
-    // Release resources
     video.release();
     Logger::log("\n", outputVideoPath, " created");
 }
