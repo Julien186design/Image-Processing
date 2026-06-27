@@ -67,7 +67,6 @@ void complete_transformations_by_proportion(
 ) {
     if constexpr (!parameters::complete_transformation_colors_by_proportion) { return; }
 
-    // Fixed proportion steps: 25 %, 50 %, 75 %.
     const std::vector<float> proportions = { 0.25f, 0.50f, 0.75f };
 
     auto apply = [](Image& img, const float proportion, const size_t transformIdx, const int colNua) -> bool {
@@ -82,10 +81,15 @@ void complete_transformations_by_proportion(
         return OutputPathBuilder::image_complete(dir, base, suffix, proportion, colNua);
     };
 
+    const int c0   = parameters::colorNuances.at(0);
+    const int c1   = parameters::colorNuances.at(1);
+    const int step = (c0 != c1) ? (c1 - c0) : 1;
+    const std::array<int, 3> twoColors = { c0, c1, step };
+
     run_transformations_by_proportion(
         baseImage, baseName, total_step_by_step_entries,
         apply, buildPath,
-        &parameters::colorNuances,
+        &twoColors,
         &proportions
     );
 }
