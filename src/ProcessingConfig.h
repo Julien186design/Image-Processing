@@ -22,13 +22,13 @@ struct parameters {
     static constexpr int fps = 20;
     static constexpr int fraction = 3;
     static constexpr std::array<int, 2> rectangles = {40, 63};
-    static constexpr std::array<int, 3> toleranceOneColor = {20, 80, 1};
+    static constexpr std::array<int, 3> toleranceOneColor = {10, 80, 1};
     static constexpr std::array<float, 3> weightOfRGB = {0.F, 1.F, .05F};
-    static constexpr std::array<float, 3> passesRGB = {.5F, 1.F, .03125F}; // 0 = original image, 1 = colored image
+    static constexpr std::array<float, 3> passesRGB = {.5F, 1.F, .0625F}; // 0 = original image, 1 = colored image
     static constexpr float noiseReduction = 100.f;
-    static constexpr bool complete_transformation_colors_by_proportion = true;
+    static constexpr bool complete_transformation_colors_by_proportion = false;
     static constexpr bool oneColor = true;
-    static constexpr bool totalReversal = true;
+    static constexpr bool totalReversal = false;
     static constexpr bool partial = false;
     static constexpr bool partialInDiagonal = false;
     static constexpr int numProportionSteps =
